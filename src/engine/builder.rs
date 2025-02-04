@@ -88,44 +88,30 @@ struct PBFParseResult {
     ways: BTreeMap<i64, WayParseData>,
 }
 
+struct BuildEdgeListResult {
+    fwd_edge_list: Vec<Vec<Edge>>,
+    bwd_edge_list: Vec<Vec<Edge>>,
+    edge_metadata: Vec<EdgeMetadata>,
+}
+
 pub fn from_osmpbf(path: &str) -> anyhow::Result<Graph> {
     let parse_result = parse_osmpbf(path)?;
 
     let nodes = build_nodes(&parse_result.osm_id_to_node);
-    let (fwd_edge_list, edge_metadata) = build_edge_list(parse_result, &nodes);
-    let bwd_edge_list = build_bwd_edge_list(&fwd_edge_list);
+    let build_edge_lists_result = build_edge_lists(parse_result, &nodes);
 
     Ok(Graph {
-        fwd_edge_list,
-        bwd_edge_list,
+        fwd_edge_list: build_edge_lists_result.fwd_edge_list,
+        bwd_edge_list: build_edge_lists_result.bwd_edge_list,
+        edge_metadata: build_edge_lists_result.edge_metadata,
         nodes,
-        edge_metadata,
     })
 }
 
-fn build_bwd_edge_list(forward: &Vec<Vec<Edge>>) -> Vec<Vec<Edge>> {
-    let mut reverse = vec![Vec::new(); forward.len()];
-
-    for (u, edges_from_u) in forward.iter().enumerate() {
-        for edge in edges_from_u {
-            let v = edge.dest_id;
-
-            let rev_edge = Edge {
-                src_id: v,
-                dest_id: u,
-                metadata_index: edge.metadata_index,
-            };
-
-            reverse[v].push(rev_edge);
-        }
-    }
-
-    reverse
-}
-
-fn build_edge_list(maps: PBFParseResult, nodes: &[Node]) -> (Vec<Vec<Edge>>, Vec<EdgeMetadata>) {
+fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult {
     let osm_to_dense: BTreeMap<i64, usize> = nodes.iter().map(|n| (n.osm_id, n.dense_id)).collect();
-    let mut edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
+    let mut fwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
+    let mut bwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
     let mut edge_metadata: Vec<EdgeMetadata> = Vec::new();
 
     for (way_id, way_data) in maps.ways {
@@ -192,16 +178,18 @@ fn build_edge_list(maps: PBFParseResult, nodes: &[Node]) -> (Vec<Vec<Edge>>, Vec
             metadata_index: edge_metadata.len(),
         };
 
-        edge_list[*start_dense_index].push(edge.clone());
-        if !way_data.is_oneway {
-            std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
-            edge_list[*end_dense_index].push(edge);
-        }
+        fwd_edge_list[*start_dense_index].push(edge.clone());
+        std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
+        bwd_edge_list[*end_dense_index].push(edge);
 
         edge_metadata.push(metadata);
     }
 
-    (edge_list, edge_metadata)
+    BuildEdgeListResult {
+        fwd_edge_list,
+        bwd_edge_list,
+        edge_metadata,
+    }
 }
 
 fn build_nodes(nodes_map: &BTreeMap<i64, NodeParseData>) -> Vec<Node> {
@@ -405,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_edge_list() {
+    fn test_build_edge_lists() {
         let mut nodes_map: BTreeMap<i64, NodeParseData> = BTreeMap::new();
         let nodes_data = [
             (10.0, 20.0, false),
@@ -445,11 +433,14 @@ mod tests {
         };
 
         let nodes = build_nodes(&nodes_map);
-        let (edge_list, edge_metadata) = build_edge_list(maps, &nodes);
+        let result = build_edge_lists(maps, &nodes);
+        let fwd_edge_list = result.fwd_edge_list;
+        let bwd_edge_list = result.bwd_edge_list;
+        let edge_metadata = result.edge_metadata;
 
-        assert!(edge_list[0].len() == 1 && edge_list[3].len() == 1);
+        assert!(fwd_edge_list[0].len() == 1 && bwd_edge_list[3].len() == 1);
         assert_eq!(
-            edge_list[0][0],
+            fwd_edge_list[0][0],
             Edge {
                 src_id: 0,
                 dest_id: 3,
@@ -458,7 +449,7 @@ mod tests {
         );
 
         assert_eq!(
-            edge_list[3][0],
+            bwd_edge_list[3][0],
             Edge {
                 src_id: 3,
                 dest_id: 0,
@@ -467,54 +458,5 @@ mod tests {
         );
 
         assert_eq!(edge_metadata[0].polyline.ids, &[1, 2]);
-    }
-
-    #[test]
-    fn test_build_bwd_edge_list() {
-        let mut nodes_map: BTreeMap<i64, NodeParseData> = BTreeMap::new();
-        let nodes_data = [
-            (10.0, 20.0, false),
-            (20.0, 30.0, false),
-            (30.0, 40.0, false),
-            (40.0, 50.0, false),
-        ];
-
-        for (i, (lat, lon, is_traffic_signal)) in nodes_data.into_iter().enumerate() {
-            nodes_map.insert(
-                i as i64,
-                NodeParseData {
-                    dense_index: i,
-                    lat,
-                    lon,
-                    is_traffic_signal,
-                },
-            );
-        }
-
-        let mut ways: BTreeMap<i64, WayParseData> = BTreeMap::new();
-
-        ways.insert(
-            0,
-            WayParseData {
-                name: None,
-                max_speed: None,
-                is_roundabout: false,
-                is_oneway: true,
-                refs: vec![0, 1, 2, 3],
-            },
-        );
-
-        let maps = PBFParseResult {
-            osm_id_to_node: nodes_map.clone(),
-            ways,
-        };
-
-        let nodes = build_nodes(&nodes_map);
-        let (edge_list, _) = build_edge_list(maps, &nodes);
-
-        let bwd_edge_list = build_bwd_edge_list(&edge_list);
-
-        assert_eq!(bwd_edge_list[3][0].src_id, 3);
-        assert_eq!(bwd_edge_list[3][0].dest_id, 0);
     }
 }
