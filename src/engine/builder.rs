@@ -1,69 +1,9 @@
 use itertools::Itertools;
-use osmpbf::{Element, ElementReader};
+use osmpbf::{Element, ElementReader, Way};
 use std::collections::BTreeMap;
 
+use super::graph::{self, Edge, EdgeMetadata, Graph, Node, Polyline};
 use super::utils;
-
-/// A ployline, represents intermediate nodes in a way.
-#[derive(Debug, Clone)]
-pub struct Polyline {
-    // Dense index of the node.
-    pub ids: Vec<usize>,
-}
-
-/// A way node.
-#[derive(Debug)]
-pub struct Node {
-    // Dense index of the node.
-    pub dense_id: usize,
-    // OSM id of the node.
-    pub osm_id: i64,
-    // lat
-    pub lat: f64,
-    // lon
-    pub lon: f64,
-    // Is traffic light.
-    pub is_traffic_light: bool,
-}
-
-/// The metadata of an edge.
-#[derive(Debug, Clone)]
-pub struct EdgeMetadata {
-    // The intermediate nodes of the way element.
-    pub polyline: Polyline,
-    // The weight of the edge.
-    pub weight: f64,
-    // Optional name of the edge (what road/street its part of).
-    pub name: Option<String>,
-    // Optional maximum speed.
-    pub speed_limit: Option<u8>,
-    // Is one way street.
-    pub is_one_way: bool,
-    // Is part of a roundabout.
-    pub is_roundabout: bool,
-}
-
-/// An edge
-#[derive(Debug, Clone, PartialEq)]
-pub struct Edge {
-    // The dense id of the source node.
-    pub src_id: usize,
-    // The dense id of the destination node.
-    pub dest_id: usize,
-    // The index of the metadata of the edge in 'edge_metadata'.
-    pub metadata_index: usize,
-}
-
-pub struct Graph {
-    // A forward edge list, indexed by the dense id of a node.
-    pub fwd_edge_list: Vec<Vec<Edge>>,
-    // A backward edge list, indexed by the dense id of a node.
-    pub bwd_edge_list: Vec<Vec<Edge>>,
-    // Indexed by the dense id of a node.
-    pub nodes: Vec<Node>,
-    // Metadata for each edge.
-    pub edge_metadata: Vec<EdgeMetadata>,
-}
 
 #[derive(Debug, Clone)]
 struct NodeParseData {
@@ -108,13 +48,27 @@ pub fn from_osmpbf(path: &str) -> anyhow::Result<Graph> {
     })
 }
 
+impl WayParseData {
+    pub fn get_weight(&self, maps: &PBFParseResult) -> f64 {
+        self.refs
+            .iter()
+            .tuple_windows()
+            .fold(0f64, |acc, (n1, n2)| {
+                // Lookup nodes for calculating weight.
+                let node1 = maps.osm_id_to_node.get(n1).unwrap();
+                let node2 = maps.osm_id_to_node.get(n2).unwrap();
+                acc + utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
+            })
+    }
+}
+
 fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult {
     let osm_to_dense: BTreeMap<i64, usize> = nodes.iter().map(|n| (n.osm_id, n.dense_id)).collect();
     let mut fwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
     let mut bwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
     let mut edge_metadata: Vec<EdgeMetadata> = Vec::new();
 
-    for (way_id, way_data) in maps.ways {
+    for (way_id, way_data) in &maps.ways {
         if way_data.refs.is_empty() {
             continue;
         }
@@ -150,16 +104,7 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
             })
             .collect();
 
-        let weight = way_data
-            .refs
-            .iter()
-            .tuple_windows()
-            .fold(0f64, |acc, (n1, n2)| {
-                // Lookup nodes for calculating weight.
-                let node1 = maps.osm_id_to_node.get(n1).unwrap();
-                let node2 = maps.osm_id_to_node.get(n2).unwrap();
-                acc + utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
-            });
+        let weight = way_data.get_weight(&maps);
 
         let metadata = EdgeMetadata {
             polyline: Polyline {
@@ -228,6 +173,26 @@ fn sort_by_lat_lon(nodes: &mut [Node]) {
     });
 }
 
+fn parse_way_name(way: &Way) -> Option<String> {
+    way.tags().find_map(|(k, v)| {
+        if k == "name:en" {
+            Some(v.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_way_max_speed(way: &Way) -> Option<u8> {
+    way.tags().find_map(|(k, v)| {
+        if k == "maxspeed" {
+            v.parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
 fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
     let reader = ElementReader::from_path(path)?;
 
@@ -248,20 +213,8 @@ fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
             osm_id_to_node.insert(node.id, node_data);
         }
         Element::Way(way) => {
-            let name = way.tags().find_map(|(k, v)| {
-                if k == "name:en" {
-                    Some(v.to_owned())
-                } else {
-                    None
-                }
-            });
-            let max_speed = way.tags().find_map(|(k, v)| {
-                if k == "maxspeed" {
-                    v.parse().ok()
-                } else {
-                    None
-                }
-            });
+            let name = parse_way_name(&way);
+            let max_speed = parse_way_max_speed(&way);
             let is_oneway = way.tags().any(|(k, v)| k == "oneway" && v == "yes");
             let is_roundabout = way.tags().any(|(_, v)| v == "roundabout");
             let refs: Vec<i64> = way.refs().collect();
