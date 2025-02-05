@@ -107,8 +107,10 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
         let weight = way_data.get_weight(&maps);
 
         let metadata = EdgeMetadata {
-            polyline: Polyline {
-                ids: polyline_data[1..polyline_data.len() - 1].to_vec(), // Collect only the intermediate nodes.
+            polyline: if polyline_data.is_empty() {
+                None
+            } else {
+                Some(Polyline { ids: polyline_data })
             },
             weight,
             name: way_data.name.clone(),
@@ -117,11 +119,7 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
             is_roundabout: way_data.is_roundabout,
         };
 
-        let mut edge = Edge {
-            src_id: *start_dense_index,
-            dest_id: *end_dense_index,
-            metadata_index: edge_metadata.len(),
-        };
+        let mut edge = Edge::new(*start_dense_index, *end_dense_index, edge_metadata.len());
 
         fwd_edge_list[*start_dense_index].push(edge.clone());
         std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
@@ -143,6 +141,8 @@ fn build_nodes(nodes_map: &BTreeMap<i64, NodeParseData>) -> Vec<Node> {
         .map(|(&osm_id, data)| Node {
             dense_id: 0,
             osm_id,
+            rank: 0.0,
+            is_contracted: false,
             lat: data.lat,
             lon: data.lon,
             is_traffic_light: data.is_traffic_signal,
@@ -410,6 +410,7 @@ mod tests {
             }
         );
 
-        assert_eq!(edge_metadata[0].polyline.ids, &[1, 2]);
+        assert!(edge_metadata[0].polyline.is_some());
+        assert_eq!(edge_metadata[0].polyline.as_ref().unwrap().ids, &[1, 2]);
     }
 }

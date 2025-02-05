@@ -1,12 +1,38 @@
 use core::f64;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BinaryHeap,
+};
+
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::{graph::Graph, witness_search::local_dijkstra};
 
-fn rank_node(graph: &Graph, node_index: usize) -> u32 {
-    let in_deg = graph.bwd_edge_list[node_index].len() as u32;
-    let out_deg = graph.fwd_edge_list[node_index].len() as u32;
+#[derive(Eq, PartialEq)]
+struct RankedNode {
+    rank: i32,
+    id: usize,
+}
+
+impl Ord for RankedNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.rank.cmp(&other.rank)
+    }
+}
+
+impl PartialOrd for RankedNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn create_shortcut_edge() {}
+
+fn rank_node(graph: &Graph, node_index: usize) -> i32 {
+    let in_deg = graph.bwd_edge_list[node_index].len() as i32;
+    let out_deg = graph.fwd_edge_list[node_index].len() as i32;
     let node_degree = in_deg + out_deg;
-    let mut num_contracted = 0u32;
+    let mut num_contracted = 0i32;
 
     for fwd_edge in graph.get_fwd_neighbors(node_index) {
         let fwd_dest_id = fwd_edge.dest_id;
@@ -35,9 +61,30 @@ fn rank_node(graph: &Graph, node_index: usize) -> u32 {
     node_degree - num_contracted
 }
 
+// Ranks all the nodes in parallel and collect them into a min-heap
+fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
+    let ranks: BinaryHeap<Reverse<RankedNode>> = graph
+        .get_nodes()
+        .par_iter()
+        .map(|node| {
+            Reverse(RankedNode {
+                rank: rank_node(graph, node.dense_id),
+                id: node.dense_id,
+            })
+        })
+        .collect();
+
+    ranks
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::engine::graph::{Edge, EdgeMetadata, Node, Polyline};
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+    use crate::engine::{
+        builder::from_osmpbf,
+        graph::{Edge, EdgeMetadata, Node},
+    };
 
     use super::*;
 
@@ -121,46 +168,16 @@ mod tests {
             ],
 
             nodes: vec![
-                Node {
-                    dense_id: 0,
-                    osm_id: 100,
-                    lat: 0.0,
-                    lon: 0.0,
-                    is_traffic_light: false,
-                },
-                Node {
-                    dense_id: 1,
-                    osm_id: 101,
-                    lat: 0.0,
-                    lon: 0.0,
-                    is_traffic_light: false,
-                },
-                Node {
-                    dense_id: 2,
-                    osm_id: 102,
-                    lat: 0.0,
-                    lon: 0.0,
-                    is_traffic_light: false,
-                },
-                Node {
-                    dense_id: 3,
-                    osm_id: 103,
-                    lat: 0.0,
-                    lon: 0.0,
-                    is_traffic_light: false,
-                },
-                Node {
-                    dense_id: 4,
-                    osm_id: 104,
-                    lat: 0.0,
-                    lon: 0.0,
-                    is_traffic_light: false,
-                },
+                Node::new(0, 100),
+                Node::new(1, 101),
+                Node::new(2, 102),
+                Node::new(3, 103),
+                Node::new(4, 104),
             ],
 
             edge_metadata: vec![
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 2.0,
                     name: None,
                     speed_limit: None,
@@ -168,7 +185,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -176,7 +193,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -184,7 +201,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -192,7 +209,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -200,7 +217,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 2.0,
                     name: None,
                     speed_limit: None,

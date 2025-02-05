@@ -79,7 +79,7 @@ pub fn local_dijkstra(
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::graph::{Edge, EdgeMetadata, Polyline};
+    use crate::engine::graph::{Edge, EdgeMetadata};
 
     use super::*;
 
@@ -128,7 +128,7 @@ mod tests {
             nodes: vec![],
             edge_metadata: vec![
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 2.0,
                     name: None,
                     speed_limit: None,
@@ -136,7 +136,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -144,7 +144,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -152,7 +152,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -160,7 +160,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 1.0,
                     name: None,
                     speed_limit: None,
@@ -168,7 +168,7 @@ mod tests {
                     is_roundabout: false,
                 },
                 EdgeMetadata {
-                    polyline: Polyline { ids: vec![] },
+                    polyline: None,
                     weight: 2.0,
                     name: None,
                     speed_limit: None,
