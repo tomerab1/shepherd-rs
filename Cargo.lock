@@ -353,6 +353,7 @@ dependencies = [
  "glam",
  "itertools",
  "osmpbf",
+ "rayon",
 ]
 
 [[package]]

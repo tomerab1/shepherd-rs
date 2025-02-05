@@ -65,6 +65,10 @@ impl Graph {
         &self.fwd_edge_list[dense_id]
     }
 
+    pub fn get_nodes(&self) -> &Vec<Node> {
+        &self.nodes
+    }
+
     // Get the forward neighbours of a node by its dense id
     pub fn get_bwd_neighbors(&self, dense_id: usize) -> &Vec<Edge> {
         &self.bwd_edge_list[dense_id]

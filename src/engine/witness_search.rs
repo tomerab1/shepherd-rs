@@ -32,7 +32,7 @@ pub fn local_dijkstra(
     src_node: usize,
     dest_node: usize,
     exclude_node: usize,
-    max_settled: i32,
+    limit_weight: f64,
 ) -> Option<f64> {
     let mut queue = BinaryHeap::new();
     let mut dist_map: HashMap<usize, f64> = HashMap::new();
@@ -40,7 +40,6 @@ pub fn local_dijkstra(
     dist_map.insert(src_node, 0.0);
     queue.push(Reverse(MinHeapItem(src_node, 0.0)));
 
-    let mut num_settled = 0;
     while let Some(Reverse(MinHeapItem(curr_id, curr_dist))) = queue.pop() {
         // Check if the curr_id node is in the map, if not itll return inf, else itll return
         // the distance from the source, if the distance is greater than the curr distance, then we can continue.
@@ -48,10 +47,10 @@ pub fn local_dijkstra(
             continue;
         }
 
-        // Inc the number of settled nodes.
-        num_settled += 1;
-        if num_settled > max_settled {
-            break;
+        // if the current distance is greater than limit weight, we can assume that the shortest path
+        // to dest_node will also result in a larger weight than limit_weight, thus we stop the search.
+        if curr_dist >= limit_weight {
+            return None;
         }
 
         // If we reached the dest node we can stop are return the distance.
@@ -183,7 +182,7 @@ mod tests {
     #[test]
     fn test_local_dijkstra() {
         let graph = get_test_graph();
-        let weight = local_dijkstra(&graph, 0, 1, 4, 5);
+        let weight = local_dijkstra(&graph, 0, 1, 4, 4.0);
         assert_eq!(weight, Some(3.0));
     }
 }
