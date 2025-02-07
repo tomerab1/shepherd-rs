@@ -120,7 +120,6 @@ mod tests {
 
         let edge_metadata = vec![
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0, // (0->4)
                 name: None,
                 speed_limit: None,
@@ -128,7 +127,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0, // (0->2)
                 name: None,
                 speed_limit: None,
@@ -136,7 +134,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0, // (1->3)
                 name: None,
                 speed_limit: None,
@@ -144,7 +141,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0, // (2->3)
                 name: None,
                 speed_limit: None,
@@ -152,7 +148,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0, // (3->1)
                 name: None,
                 speed_limit: None,
@@ -160,7 +155,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0, // (4->1)
                 name: None,
                 speed_limit: None,

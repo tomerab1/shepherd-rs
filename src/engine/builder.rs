@@ -2,7 +2,7 @@ use itertools::Itertools;
 use osmpbf::{Element, ElementReader, Way};
 use std::collections::BTreeMap;
 
-use super::graph::{Edge, EdgeMetadata, Graph, Node, Polyline};
+use super::graph::{Edge, EdgeMetadata, Graph, Node};
 use super::utils;
 
 #[derive(Debug, Clone)]
@@ -50,47 +50,14 @@ pub fn from_osmpbf(path: &str) -> anyhow::Result<Graph> {
     })
 }
 
-impl WayParseData {
-    pub fn get_weight(&self, maps: &PBFParseResult) -> f64 {
-        self.refs
-            .iter()
-            .tuple_windows()
-            .fold(0f64, |acc, (n1, n2)| {
-                // Lookup nodes for calculating weight.
-                let node1 = maps.osm_id_to_node.get(n1).unwrap();
-                let node2 = maps.osm_id_to_node.get(n2).unwrap();
-                acc + utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
-            })
-    }
+fn parse_polyline_data(way_data: &WayParseData) -> Vec<i64> {
+    way_data.refs.to_vec()
 }
 
-fn parse_polyline_data(
-    way_data: &WayParseData,
-    osm_to_dense: &BTreeMap<i64, usize>,
-    way_id: i64,
-) -> Vec<usize> {
-    way_data
-        .refs
-        .iter()
-        .map(|id| {
-            *osm_to_dense.get(id).unwrap_or_else(|| {
-                panic!(
-                    "Node with id={} was not found in Way with id={}",
-                    id, way_id
-                )
-            })
-        })
-        .collect()
-}
-
-fn get_polyline_for_metadata(polyline: &[usize]) -> Option<Polyline> {
-    if polyline.len() > 2 {
-        Some(Polyline {
-            ids: polyline[1..polyline.len() - 1].to_vec(),
-        })
-    } else {
-        None
-    }
+fn calc_weight(id1: i64, id2: i64, maps: &PBFParseResult) -> f64 {
+    let node1 = maps.osm_id_to_node.get(&id1).unwrap();
+    let node2 = maps.osm_id_to_node.get(&id2).unwrap();
+    utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
 }
 
 fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult {
@@ -100,55 +67,39 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
     let mut edge_metadata: Vec<EdgeMetadata> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
 
-    for (way_id, way_data) in &maps.ways {
+    for way_data in maps.ways.values() {
         if way_data.refs.is_empty() {
             continue;
         }
 
-        // Get start and end node IDs.
-        let start_id = way_data.refs.first().unwrap();
-        let end_id = way_data.refs.last().unwrap();
+        let polyline_data = parse_polyline_data(way_data);
+        for (id1, id2) in polyline_data.iter().tuple_windows() {
+            let weight = calc_weight(*id1, *id2, &maps);
+            let node1 = osm_to_dense.get(id1).unwrap();
+            let node2 = osm_to_dense.get(id2).unwrap();
 
-        // Get the dense indexes
-        let start_dense_index = osm_to_dense.get(start_id).unwrap_or_else(|| {
-            panic!(
-                "Node with id={} was not found in Way with id={}",
-                start_id, way_id
-            )
-        });
-        let end_dense_index = osm_to_dense.get(end_id).unwrap_or_else(|| {
-            panic!(
-                "Node with id={} was not found in Way with id={}",
-                end_id, way_id
-            )
-        });
+            let metadata = EdgeMetadata {
+                weight,
+                is_one_way: way_data.is_oneway,
+                is_roundabout: way_data.is_roundabout,
+                name: way_data.name.clone(),
+                speed_limit: way_data.max_speed,
+            };
 
-        let polyline_data = parse_polyline_data(&way_data, &osm_to_dense, *way_id);
-        let polyline_data_for_metadata = get_polyline_for_metadata(&polyline_data);
-        let weight = way_data.get_weight(&maps);
+            let mut edge = Edge::new(*node1, *node2, edge_metadata.len());
 
-        let metadata = EdgeMetadata {
-            polyline: polyline_data_for_metadata,
-            weight,
-            name: way_data.name.clone(),
-            speed_limit: way_data.max_speed,
-            is_one_way: way_data.is_oneway,
-            is_roundabout: way_data.is_roundabout,
-        };
+            fwd_edge_list[*node1].push(edges.len());
+            edges.push(edge.clone());
 
-        let mut edge = Edge::new(*start_dense_index, *end_dense_index, edge_metadata.len());
+            if !way_data.is_oneway {
+                // Push the backward edge if the way is not a one way street.
+                std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
+                bwd_edge_list[*node2].push(edges.len());
+                edges.push(edge);
+            }
 
-        // Push the forward edge
-        fwd_edge_list[*start_dense_index].push(edges.len());
-        edges.push(edge.clone());
-
-        // Push the backward edge.
-        std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
-        bwd_edge_list[*end_dense_index].push(edges.len());
-        edges.push(edge);
-
-        // Push the edge metadata
-        edge_metadata.push(metadata);
+            edge_metadata.push(metadata);
+        }
     }
 
     BuildEdgeListResult {
@@ -413,7 +364,7 @@ mod tests {
 
         let fwd_edge_list = result.fwd_edge_list;
         let bwd_edge_list = result.bwd_edge_list;
-        let edge_metadata = result.edge_metadata;
+
         let edges = result.edges;
         assert_eq!(fwd_edge_list[0].len(), 1);
         assert_eq!(bwd_edge_list[3].len(), 1);
@@ -431,8 +382,5 @@ mod tests {
         assert_eq!(edge_bwd.src_id, 3);
         assert_eq!(edge_bwd.dest_id, 0);
         assert_eq!(edge_bwd.metadata_index, 0);
-
-        assert!(edge_metadata[0].polyline.is_some());
-        assert_eq!(edge_metadata[0].polyline.as_ref().unwrap().ids, &[1, 2]);
     }
 }

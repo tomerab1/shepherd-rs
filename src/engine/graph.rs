@@ -1,12 +1,4 @@
 use humansize::{format_size, DECIMAL};
-use std::usize;
-
-/// A ployline, represents intermediate nodes in a way.
-#[derive(Debug, Clone)]
-pub struct Polyline {
-    // Dense index of the node.
-    pub ids: Vec<usize>,
-}
 
 /// A way node.
 #[derive(Debug)]
@@ -30,8 +22,6 @@ pub struct Node {
 /// The metadata of an edge.
 #[derive(Debug, Clone)]
 pub struct EdgeMetadata {
-    // The intermediate nodes of the way element.
-    pub polyline: Option<Polyline>,
     // The weight of the edge.
     pub weight: f64,
     // Optional name of the edge (what road/street its part of).

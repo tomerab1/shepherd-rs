@@ -4,11 +4,9 @@ use std::{
     collections::BinaryHeap,
 };
 
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-
-use crate::engine::graph::EdgeMetadata;
-
 use super::{graph::Graph, witness_search::local_dijkstra};
+use crate::engine::graph::EdgeMetadata;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct RankedNode {
@@ -44,9 +42,6 @@ pub fn contract_graph(graph: &mut Graph) {
 }
 
 fn contract_node(graph: &mut Graph, node_id: usize) {
-    let node = graph.get_node_mut(node_id);
-    node.set_is_contracted(true);
-
     let fwd_indices = graph.get_fwd_neighbors(node_id).clone();
     let bwd_indices = graph.get_bwd_neighbors(node_id).clone();
 
@@ -58,7 +53,7 @@ fn contract_node(graph: &mut Graph, node_id: usize) {
             let bwd_edge = graph.get_edge(bwd_edge_index);
             let v = bwd_edge.src_id;
 
-            if v == w || graph.edge_exists(v, w) {
+            if v == w {
                 continue;
             }
 
@@ -69,7 +64,9 @@ fn contract_node(graph: &mut Graph, node_id: usize) {
             let witness_weight =
                 local_dijkstra(graph, v, w, node_id, combined_weight).unwrap_or(f64::INFINITY);
 
-            if witness_weight > combined_weight {
+            if witness_weight >= combined_weight {
+                let node = graph.get_node_mut(node_id);
+                node.set_is_contracted(true);
                 add_shortcut(graph, v, w, combined_weight, bwd_edge_index, fwd_edge_index);
             }
         }
@@ -88,7 +85,6 @@ fn add_shortcut(
     right_edge_index: usize,
 ) {
     let shortcut_metadata = EdgeMetadata {
-        polyline: None,
         weight: combined_weight,
         speed_limit: None,
         name: None,
@@ -183,9 +179,12 @@ pub fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{Edge, EdgeMetadata, Graph, Node};
+    use crate::engine::{
+        builder::from_osmpbf,
+        graph::{Edge, EdgeMetadata, Graph, Node},
+    };
 
-    // Same conceptual example graph:
+    // Test graph
     //       (2)     (2)
     //     0 ---- 4 ---- 1
     // (1) |             | (1)
@@ -226,7 +225,6 @@ mod tests {
 
         let edge_metadata = vec![
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0,
                 name: None,
                 speed_limit: None,
@@ -234,7 +232,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0,
                 name: None,
                 speed_limit: None,
@@ -242,7 +239,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0,
                 name: None,
                 speed_limit: None,
@@ -250,7 +246,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0,
                 name: None,
                 speed_limit: None,
@@ -258,7 +253,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 1.0,
                 name: None,
                 speed_limit: None,
@@ -266,7 +260,6 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                polyline: None,
                 weight: 2.0,
                 name: None,
                 speed_limit: None,
@@ -315,5 +308,12 @@ mod tests {
         for metadata in graph.edge_metadata.iter() {
             println!("{:?}", metadata);
         }
+    }
+
+    #[test]
+    fn test() {
+        let mut graph = from_osmpbf("tests/data/nz-car-only.osm.pbf").unwrap();
+
+        contract_graph(&mut graph);
     }
 }
