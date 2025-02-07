@@ -94,6 +94,11 @@ impl Graph {
         &self.nodes[dense_id]
     }
 
+    // Gets a mutable node by its dense id
+    pub fn get_node_mut(&mut self, dense_id: usize) -> &mut Node {
+        &mut self.nodes[dense_id]
+    }
+
     // Gets the metadata of an edge.
     pub fn get_edge_metadata(&self, edge: &Edge) -> &EdgeMetadata {
         &self.edge_metadata[edge.metadata_index]
@@ -115,6 +120,10 @@ impl Graph {
         self.bwd_edge_list[dest_id].push(edge_id);
 
         edge_id
+    }
+
+    pub fn edge_exists(&self, v: usize, w: usize) -> bool {
+        self.edges.iter().any(|e| e.src_id == v && e.dest_id == w)
     }
 
     pub fn add_shortcut_edge(

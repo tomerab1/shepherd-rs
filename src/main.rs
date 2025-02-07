@@ -1,10 +1,12 @@
-use routing_engine::engine::{builder::from_osmpbf, ch_preprocesses::rank_nodes};
+use routing_engine::engine::{builder::from_osmpbf, ch_preprocesses::contract_graph};
 
 fn main() {
-    let graph =
-        from_osmpbf("/home/tomerab/VSCProjects/routing-engine/data/il-car-only.osm.pbf").unwrap();
+    let mut graph =
+        from_osmpbf("/home/tomerab/VSCProjects/routing-engine/tests/data/nz-car-only.pbf.osm")
+            .unwrap();
+
+    contract_graph(&mut graph);
 
     println!("{}", graph.get_mem_usage_str());
-
-    _ = rank_nodes(&graph);
+    println!("{:?}", graph.edges);
 }
