@@ -1,3 +1,4 @@
+use humansize::{format_size, DECIMAL};
 use std::usize;
 
 /// A ployline, represents intermediate nodes in a way.
@@ -137,6 +138,52 @@ impl Graph {
         self.bwd_edge_list[dest_id].push(edge_id);
 
         edge_id
+    }
+
+    fn get_nodes_bytes(&self) -> usize {
+        self.nodes.len() * std::mem::size_of::<Node>()
+    }
+
+    fn get_edges_bytes(&self) -> usize {
+        self.edges.len() * std::mem::size_of::<Edge>()
+    }
+
+    fn get_edges_metadata_bytes(&self) -> usize {
+        self.edge_metadata.len() * std::mem::size_of::<EdgeMetadata>()
+    }
+
+    fn get_fwd_bytes(&self) -> usize {
+        self.fwd_edge_list
+            .iter()
+            .map(|v| std::mem::size_of_val(v) + v.len() * std::mem::size_of::<usize>())
+            .sum()
+    }
+
+    fn get_bwd_bytes(&self) -> usize {
+        self.bwd_edge_list
+            .iter()
+            .map(|v| std::mem::size_of_val(v) + v.len() * std::mem::size_of::<usize>())
+            .sum()
+    }
+
+    pub fn get_mem_usage_str(&self) -> String {
+        let node_bytes = self.get_nodes_bytes();
+        let fwd_bytes = self.get_fwd_bytes();
+        let bwd_bytes = self.get_bwd_bytes();
+        let edge_bytes = self.get_edges_bytes();
+        let edge_metadata_bytes = self.get_edges_metadata_bytes();
+
+        let total = node_bytes + fwd_bytes + bwd_bytes + edge_bytes + edge_metadata_bytes;
+
+        format!(
+            "nodes={}, fwd_edges={}, bwd_edges={}, edges={}, edge_metadata={}, total={}",
+            format_size(node_bytes, DECIMAL),
+            format_size(fwd_bytes, DECIMAL),
+            format_size(bwd_bytes, DECIMAL),
+            format_size(edge_bytes, DECIMAL),
+            format_size(edge_metadata_bytes, DECIMAL),
+            format_size(total, DECIMAL),
+        )
     }
 }
 

@@ -9,3 +9,17 @@ glam = "0.29.2"
 itertools = "0.14.0"
 osmpbf = "0.3.4"
 rayon = "1.10.0"
+humansize = "2.0.0"
+
+# Add a binary target. This tells Cargo that in addition to the library,
+[[bin]]
+name = "routing-engine-bin"
+path = "src/main.rs"
+
+[profile.release]
+# These settings are recommended for maximum performance in release mode.
+opt-level = 3           # Maximum optimization
+debug = false           # Remove debug info to reduce binary size
+lto = true              # Enable Link Time Optimization for further speed improvements
+codegen-units = 1       # Fewer codegen units can yield better optimizations at the cost of longer compile times
+panic = "abort"         # Use abort-on-panic to reduce binary size and runtime overhead

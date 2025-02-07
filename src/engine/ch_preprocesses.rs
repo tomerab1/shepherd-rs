@@ -8,8 +8,8 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::{graph::Graph, witness_search::local_dijkstra};
 
-#[derive(Eq, PartialEq)]
-struct RankedNode {
+#[derive(Debug, Eq, PartialEq)]
+pub struct RankedNode {
     rank: i32,
     id: usize,
 }
@@ -26,18 +26,18 @@ impl PartialOrd for RankedNode {
     }
 }
 
-fn create_shortcut_edge() {}
-
 fn rank_node(graph: &Graph, node_index: usize) -> i32 {
     let in_deg = graph.bwd_edge_list[node_index].len() as i32;
     let out_deg = graph.fwd_edge_list[node_index].len() as i32;
     let node_degree = in_deg + out_deg;
     let mut num_contracted = 0i32;
 
-    for fwd_edge in graph.get_fwd_neighbors(node_index) {
+    for fwd_edge_index in graph.get_fwd_neighbors(node_index) {
+        let fwd_edge = graph.get_edge(*fwd_edge_index);
         let fwd_dest_id = fwd_edge.dest_id;
 
-        for bwd_edge in graph.get_bwd_neighbors(node_index) {
+        for bwd_edge_index in graph.get_bwd_neighbors(node_index) {
+            let bwd_edge = graph.get_edge(*bwd_edge_index);
             let bwd_dest_id = bwd_edge.dest_id;
 
             if fwd_dest_id == bwd_dest_id {
@@ -62,7 +62,7 @@ fn rank_node(graph: &Graph, node_index: usize) -> i32 {
 }
 
 // Ranks all the nodes in parallel and collect them into a min-heap
-fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
+pub fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
     let ranks: BinaryHeap<Reverse<RankedNode>> = graph
         .get_nodes()
         .par_iter()
@@ -79,152 +79,111 @@ fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
 
 #[cfg(test)]
 mod tests {
-    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-
+    use super::*;
     use crate::engine::{
         builder::from_osmpbf,
-        graph::{Edge, EdgeMetadata, Node},
+        graph::{Edge, EdgeMetadata, Graph, Node},
     };
 
-    use super::*;
+    static TEST_FILE_PATH: &str = "tests/data/nz-car-only.pbf.osm";
 
+    // Same conceptual example graph:
     //       (2)     (2)
     //     0 ---- 4 ---- 1
     // (1) |             | (1)
     //    2 ----------- 3
     //           (1)
+
     fn get_test_graph() -> Graph {
+        let edges = vec![
+            Edge::new(0, 4, 0),
+            Edge::new(0, 2, 1),
+            Edge::new(1, 3, 2),
+            Edge::new(2, 3, 3),
+            Edge::new(3, 1, 4),
+            Edge::new(4, 1, 5),
+        ];
+
+        let mut fwd_edge_list = vec![Vec::new(); 5];
+        fwd_edge_list[0] = vec![0, 1];
+        fwd_edge_list[1] = vec![2];
+        fwd_edge_list[2] = vec![3];
+        fwd_edge_list[3] = vec![4];
+        fwd_edge_list[4] = vec![5];
+
+        let mut bwd_edge_list = vec![Vec::new(); 5];
+        bwd_edge_list[4].push(0);
+        bwd_edge_list[2].push(1);
+        bwd_edge_list[3].push(2);
+        bwd_edge_list[3].push(3);
+        bwd_edge_list[1].push(4);
+        bwd_edge_list[1].push(5);
+
+        let nodes = vec![
+            Node::new(0, 100),
+            Node::new(1, 101),
+            Node::new(2, 102),
+            Node::new(3, 103),
+            Node::new(4, 104),
+        ];
+
+        let edge_metadata = vec![
+            EdgeMetadata {
+                polyline: None,
+                weight: 2.0, // 0->4
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // 0->2
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // 1->3
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // 2->3
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // 3->1
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 2.0, // 4->1
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+        ];
+
         Graph {
-            // Forward edges
-            fwd_edge_list: vec![
-                vec![
-                    Edge {
-                        src_id: 0,
-                        dest_id: 4,
-                        metadata_index: 0,
-                    },
-                    Edge {
-                        src_id: 0,
-                        dest_id: 2,
-                        metadata_index: 1,
-                    },
-                ],
-                vec![Edge {
-                    src_id: 1,
-                    dest_id: 3,
-                    metadata_index: 2,
-                }],
-                vec![Edge {
-                    src_id: 2,
-                    dest_id: 3,
-                    metadata_index: 3,
-                }],
-                vec![Edge {
-                    src_id: 3,
-                    dest_id: 1,
-                    metadata_index: 4,
-                }],
-                vec![Edge {
-                    src_id: 4,
-                    dest_id: 1,
-                    metadata_index: 5,
-                }],
-            ],
-
-            // Backward edges
-            bwd_edge_list: vec![
-                vec![
-                    Edge {
-                        src_id: 4,
-                        dest_id: 0,
-                        metadata_index: 0,
-                    },
-                    Edge {
-                        src_id: 2,
-                        dest_id: 0,
-                        metadata_index: 1,
-                    },
-                ],
-                vec![Edge {
-                    src_id: 3,
-                    dest_id: 1,
-                    metadata_index: 2,
-                }],
-                vec![Edge {
-                    src_id: 3,
-                    dest_id: 2,
-                    metadata_index: 3,
-                }],
-                vec![Edge {
-                    src_id: 1,
-                    dest_id: 3,
-                    metadata_index: 4,
-                }],
-                vec![Edge {
-                    src_id: 1,
-                    dest_id: 4,
-                    metadata_index: 5,
-                }],
-            ],
-
-            nodes: vec![
-                Node::new(0, 100),
-                Node::new(1, 101),
-                Node::new(2, 102),
-                Node::new(3, 103),
-                Node::new(4, 104),
-            ],
-
-            edge_metadata: vec![
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 2.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 2.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-            ],
+            fwd_edge_list,
+            bwd_edge_list,
+            nodes,
+            edges,
+            edge_metadata,
         }
     }
 
@@ -233,7 +192,13 @@ mod tests {
         let graph = get_test_graph();
 
         for node in graph.get_nodes() {
-            println!("{:?}", rank_node(&graph, node.dense_id));
+            let r = rank_node(&graph, node.dense_id);
+            println!("Node={} rank={}", node.dense_id, r);
+        }
+
+        let all_ranks = rank_nodes(&graph);
+        for std::cmp::Reverse(rn) in all_ranks {
+            println!("Node={} final_rank={}", rn.id, rn.rank);
         }
     }
 }

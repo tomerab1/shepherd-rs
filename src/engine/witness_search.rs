@@ -59,14 +59,15 @@ pub fn local_dijkstra(
         }
 
         // Iterate over each neighbor, skip the excluded node, update the node if there is a shorter path and insert it to the priority queue.
-        for neighbor in graph.get_fwd_neighbors(curr_id) {
-            let neighbor_id = neighbor.dest_id;
+        for neighbor_index in graph.get_fwd_neighbors(curr_id) {
+            let neighbor_edge = graph.get_edge(*neighbor_index);
+            let neighbor_id = neighbor_edge.dest_id;
 
             if neighbor_id == exclude_node {
                 continue;
             }
 
-            let alt = curr_dist + graph.get_edge_metadata(neighbor).weight;
+            let alt = curr_dist + graph.get_edge_metadata(neighbor_edge).weight;
             if alt < dist_map.get(&neighbor_id).copied().unwrap_or(f64::INFINITY) {
                 dist_map.insert(neighbor_id, alt);
                 queue.push(Reverse(MinHeapItem(neighbor_id, alt)));
@@ -79,103 +80,101 @@ pub fn local_dijkstra(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::engine::graph::{Edge, EdgeMetadata};
 
-    use super::*;
-
+    //
     //       (2)     (2)
     //     0 ---- 4 ---- 1
-    // (1) |             | (1)
+    //  (1)|             |(1)
     //    2 ----------- 3
-    //           (1)
+    //         (1)
+    //
     fn get_test_graph() -> Graph {
+        let edges = vec![
+            Edge::new(0, 4, 0),
+            Edge::new(0, 2, 1),
+            Edge::new(1, 3, 2),
+            Edge::new(2, 3, 3),
+            Edge::new(3, 1, 4),
+            Edge::new(4, 1, 5),
+        ];
+
+        let mut fwd_edge_list = vec![Vec::new(); 5];
+
+        fwd_edge_list[0].push(0);
+        fwd_edge_list[0].push(1);
+        fwd_edge_list[1].push(2);
+        fwd_edge_list[2].push(3);
+        fwd_edge_list[3].push(4);
+        fwd_edge_list[4].push(5);
+
+        let mut bwd_edge_list = vec![Vec::new(); 5];
+
+        bwd_edge_list[4].push(0);
+        bwd_edge_list[2].push(1);
+        bwd_edge_list[3].push(2);
+        bwd_edge_list[3].push(3);
+        bwd_edge_list[1].push(4);
+        bwd_edge_list[1].push(5);
+
+        let edge_metadata = vec![
+            EdgeMetadata {
+                polyline: None,
+                weight: 2.0, // (0->4)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // (0->2)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // (1->3)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // (2->3)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 1.0, // (3->1)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                polyline: None,
+                weight: 2.0, // (4->1)
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+        ];
+
         Graph {
-            fwd_edge_list: vec![
-                vec![
-                    Edge {
-                        src_id: 0,
-                        dest_id: 4,
-                        metadata_index: 0,
-                    },
-                    Edge {
-                        src_id: 0,
-                        dest_id: 2,
-                        metadata_index: 1,
-                    },
-                ],
-                vec![Edge {
-                    src_id: 1,
-                    dest_id: 3,
-                    metadata_index: 2,
-                }],
-                vec![Edge {
-                    src_id: 2,
-                    dest_id: 3,
-                    metadata_index: 3,
-                }],
-                vec![Edge {
-                    src_id: 3,
-                    dest_id: 1,
-                    metadata_index: 4,
-                }],
-                vec![Edge {
-                    src_id: 4,
-                    dest_id: 1,
-                    metadata_index: 5,
-                }],
-            ],
-            bwd_edge_list: vec![],
+            fwd_edge_list,
+            bwd_edge_list,
+            edges,
+            edge_metadata,
             nodes: vec![],
-            edge_metadata: vec![
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 2.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 1.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-                EdgeMetadata {
-                    polyline: None,
-                    weight: 2.0,
-                    name: None,
-                    speed_limit: None,
-                    is_one_way: false,
-                    is_roundabout: false,
-                },
-            ],
         }
     }
 
@@ -183,6 +182,7 @@ mod tests {
     fn test_local_dijkstra() {
         let graph = get_test_graph();
         let weight = local_dijkstra(&graph, 0, 1, 4, 4.0);
+
         assert_eq!(weight, Some(3.0));
     }
 }

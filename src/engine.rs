@@ -1,6 +1,6 @@
-mod builder;
-mod ch_preprocesses;
+pub mod builder;
+pub mod ch_preprocesses;
 mod ch_query;
-mod graph;
+pub mod graph;
 mod utils;
 mod witness_search;

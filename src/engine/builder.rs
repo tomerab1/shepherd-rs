@@ -2,7 +2,7 @@ use itertools::Itertools;
 use osmpbf::{Element, ElementReader, Way};
 use std::collections::BTreeMap;
 
-use super::graph::{self, Edge, EdgeMetadata, Graph, Node, Polyline};
+use super::graph::{Edge, EdgeMetadata, Graph, Node, Polyline};
 use super::utils;
 
 #[derive(Debug, Clone)]
@@ -29,8 +29,9 @@ struct PBFParseResult {
 }
 
 struct BuildEdgeListResult {
-    fwd_edge_list: Vec<Vec<Edge>>,
-    bwd_edge_list: Vec<Vec<Edge>>,
+    fwd_edge_list: Vec<Vec<usize>>,
+    bwd_edge_list: Vec<Vec<usize>>,
+    edges: Vec<Edge>,
     edge_metadata: Vec<EdgeMetadata>,
 }
 
@@ -43,6 +44,7 @@ pub fn from_osmpbf(path: &str) -> anyhow::Result<Graph> {
     Ok(Graph {
         fwd_edge_list: build_edge_lists_result.fwd_edge_list,
         bwd_edge_list: build_edge_lists_result.bwd_edge_list,
+        edges: build_edge_lists_result.edges,
         edge_metadata: build_edge_lists_result.edge_metadata,
         nodes,
     })
@@ -62,11 +64,41 @@ impl WayParseData {
     }
 }
 
+fn parse_polyline_data(
+    way_data: &WayParseData,
+    osm_to_dense: &BTreeMap<i64, usize>,
+    way_id: i64,
+) -> Vec<usize> {
+    way_data
+        .refs
+        .iter()
+        .map(|id| {
+            *osm_to_dense.get(id).unwrap_or_else(|| {
+                panic!(
+                    "Node with id={} was not found in Way with id={}",
+                    id, way_id
+                )
+            })
+        })
+        .collect()
+}
+
+fn get_polyline_for_metadata(polyline: &[usize]) -> Option<Polyline> {
+    if polyline.len() > 2 {
+        Some(Polyline {
+            ids: polyline[1..polyline.len() - 1].to_vec(),
+        })
+    } else {
+        None
+    }
+}
+
 fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult {
     let osm_to_dense: BTreeMap<i64, usize> = nodes.iter().map(|n| (n.osm_id, n.dense_id)).collect();
-    let mut fwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
-    let mut bwd_edge_list: Vec<Vec<Edge>> = vec![Vec::new(); nodes.len()];
+    let mut fwd_edge_list: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    let mut bwd_edge_list: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     let mut edge_metadata: Vec<EdgeMetadata> = Vec::new();
+    let mut edges: Vec<Edge> = Vec::new();
 
     for (way_id, way_data) in &maps.ways {
         if way_data.refs.is_empty() {
@@ -91,27 +123,12 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
             )
         });
 
-        let polyline_data: Vec<usize> = way_data
-            .refs
-            .iter()
-            .map(|id| {
-                *osm_to_dense.get(id).unwrap_or_else(|| {
-                    panic!(
-                        "Node with id={} was not found in Way with id={}",
-                        id, way_id
-                    )
-                })
-            })
-            .collect();
-
+        let polyline_data = parse_polyline_data(&way_data, &osm_to_dense, *way_id);
+        let polyline_data_for_metadata = get_polyline_for_metadata(&polyline_data);
         let weight = way_data.get_weight(&maps);
 
         let metadata = EdgeMetadata {
-            polyline: if polyline_data.is_empty() {
-                None
-            } else {
-                Some(Polyline { ids: polyline_data })
-            },
+            polyline: polyline_data_for_metadata,
             weight,
             name: way_data.name.clone(),
             speed_limit: way_data.max_speed,
@@ -121,16 +138,23 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
 
         let mut edge = Edge::new(*start_dense_index, *end_dense_index, edge_metadata.len());
 
-        fwd_edge_list[*start_dense_index].push(edge.clone());
-        std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
-        bwd_edge_list[*end_dense_index].push(edge);
+        // Push the forward edge
+        fwd_edge_list[*start_dense_index].push(edges.len());
+        edges.push(edge.clone());
 
+        // Push the backward edge.
+        std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
+        bwd_edge_list[*end_dense_index].push(edges.len());
+        edges.push(edge);
+
+        // Push the edge metadata
         edge_metadata.push(metadata);
     }
 
     BuildEdgeListResult {
         fwd_edge_list,
         bwd_edge_list,
+        edges,
         edge_metadata,
     }
 }
@@ -141,7 +165,7 @@ fn build_nodes(nodes_map: &BTreeMap<i64, NodeParseData>) -> Vec<Node> {
         .map(|(&osm_id, data)| Node {
             dense_id: 0,
             osm_id,
-            rank: 0.0,
+            rank: 0,
             is_contracted: false,
             lat: data.lat,
             lon: data.lon,
@@ -368,7 +392,6 @@ mod tests {
         }
 
         let mut ways: BTreeMap<i64, WayParseData> = BTreeMap::new();
-
         ways.insert(
             0,
             WayParseData {
@@ -387,28 +410,27 @@ mod tests {
 
         let nodes = build_nodes(&nodes_map);
         let result = build_edge_lists(maps, &nodes);
+
         let fwd_edge_list = result.fwd_edge_list;
         let bwd_edge_list = result.bwd_edge_list;
         let edge_metadata = result.edge_metadata;
+        let edges = result.edges;
+        assert_eq!(fwd_edge_list[0].len(), 1);
+        assert_eq!(bwd_edge_list[3].len(), 1);
 
-        assert!(fwd_edge_list[0].len() == 1 && bwd_edge_list[3].len() == 1);
-        assert_eq!(
-            fwd_edge_list[0][0],
-            Edge {
-                src_id: 0,
-                dest_id: 3,
-                metadata_index: 0
-            }
-        );
+        let edge_id_fwd = fwd_edge_list[0][0];
+        let edge_fwd = &edges[edge_id_fwd];
 
-        assert_eq!(
-            bwd_edge_list[3][0],
-            Edge {
-                src_id: 3,
-                dest_id: 0,
-                metadata_index: 0
-            }
-        );
+        assert_eq!(edge_fwd.src_id, 0);
+        assert_eq!(edge_fwd.dest_id, 3);
+        assert_eq!(edge_fwd.metadata_index, 0);
+
+        let edge_id_bwd = bwd_edge_list[3][0];
+        let edge_bwd = &edges[edge_id_bwd];
+
+        assert_eq!(edge_bwd.src_id, 3);
+        assert_eq!(edge_bwd.dest_id, 0);
+        assert_eq!(edge_bwd.metadata_index, 0);
 
         assert!(edge_metadata[0].polyline.is_some());
         assert_eq!(edge_metadata[0].polyline.as_ref().unwrap().ids, &[1, 2]);
