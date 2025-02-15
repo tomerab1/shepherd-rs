@@ -1,7 +1,9 @@
 use humansize::{format_size, DECIMAL};
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 /// A way node.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     // Dense index of the node.
     pub dense_id: usize,
@@ -20,7 +22,7 @@ pub struct Node {
 }
 
 /// The metadata of an edge.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeMetadata {
     // The weight of the edge.
     pub weight: f64,
@@ -35,7 +37,7 @@ pub struct EdgeMetadata {
 }
 
 /// An edge
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     // The dense id of the source node.
     pub src_id: usize,
@@ -51,6 +53,7 @@ pub struct Edge {
     pub next_edge: Option<usize>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Graph {
     // A forward edge list, indexed by the dense id of a node.
     pub fwd_edge_list: Vec<Vec<usize>>,
@@ -65,6 +68,14 @@ pub struct Graph {
 }
 
 impl Graph {
+    pub fn num_nodes(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn num_edges(&self) -> usize {
+        self.edges.len()
+    }
+
     // Get the forward neighbours of a node by its dense id
     pub fn get_fwd_neighbors(&self, dense_id: usize) -> &Vec<usize> {
         &self.fwd_edge_list[dense_id]
@@ -87,6 +98,18 @@ impl Graph {
     // Gets a mutable node by its dense id
     pub fn get_node_mut(&mut self, dense_id: usize) -> &mut Node {
         &mut self.nodes[dense_id]
+    }
+
+    pub fn find_edge(&self, w: usize, v: usize) -> Option<&Edge> {
+        // Get all edges that originate from node w
+        for &edge_id in &self.fwd_edge_list[w] {
+            let edge = &self.edges[edge_id];
+            // Check if this edge goes from w to v
+            if edge.dest_id == v {
+                return Some(edge);
+            }
+        }
+        None
     }
 
     // Gets the metadata of an edge.
@@ -112,10 +135,6 @@ impl Graph {
         edge_id
     }
 
-    pub fn edge_exists(&self, v: usize, w: usize) -> bool {
-        self.edges.iter().any(|e| e.src_id == v && e.dest_id == w)
-    }
-
     pub fn add_shortcut_edge(
         &mut self,
         src_id: usize,
@@ -123,8 +142,8 @@ impl Graph {
         metadata_index: usize,
         prev_edge: usize,
         next_edge: usize,
-    ) -> usize {
-        let edge_id = self.edges.len();
+    ) {
+        let edge_id_forward = self.edges.len();
         self.edges.push(Edge::new_shortcut(
             src_id,
             dest_id,
@@ -133,10 +152,11 @@ impl Graph {
             next_edge,
         ));
 
-        self.fwd_edge_list[src_id].push(edge_id);
-        self.bwd_edge_list[dest_id].push(edge_id);
+        self.fwd_edge_list[src_id].push(edge_id_forward);
 
-        edge_id
+        if src_id != dest_id {
+            self.bwd_edge_list[dest_id].push(edge_id_forward);
+        }
     }
 
     fn get_nodes_bytes(&self) -> usize {
@@ -201,6 +221,12 @@ impl Node {
 
     pub fn set_rank(&mut self, rank: i32) {
         self.rank = rank;
+    }
+
+    pub fn raise_rank(&mut self, rank: i32) {
+        if rank >= self.rank {
+            self.rank = rank;
+        }
     }
 
     pub fn get_rank(&self) -> i32 {

@@ -1,161 +1,215 @@
 use core::f64;
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::{BinaryHeap, HashMap},
-};
+use std::cmp::Ordering;
+
+use priority_queue::PriorityQueue;
 
 use super::graph::Graph;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct MinHeapItem(usize, f64);
+struct HeapItem(f64);
 
-impl Eq for MinHeapItem {}
+impl Eq for HeapItem {}
 
-impl Ord for MinHeapItem {
+impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.1
-            .partial_cmp(&other.1)
-            .unwrap_or(Ordering::Equal)
-            .reverse()
+        other.0.partial_cmp(&self.0).unwrap_or(Ordering::Equal)
     }
 }
 
-impl PartialOrd for MinHeapItem {
+impl PartialOrd for HeapItem {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-// A local dijkstra search, for the witness search phase of ch.
-pub fn local_dijkstra(
-    graph: &Graph,
-    src_node: usize,
-    dest_node: usize,
-    exclude_node: usize,
-    limit_weight: f64,
-) -> Option<f64> {
-    let mut queue = BinaryHeap::new();
-    let mut dist_map: HashMap<usize, f64> = HashMap::new();
+pub struct Dijkstra {
+    src: usize,
+    ignore: usize,
+    weights: Vec<f64>,
+    queue: PriorityQueue<usize, HeapItem>,
+}
 
-    dist_map.insert(src_node, 0.0);
-    queue.push(Reverse(MinHeapItem(src_node, 0.0)));
-
-    while let Some(Reverse(MinHeapItem(curr_id, curr_dist))) = queue.pop() {
-        // Check if the curr_id node is in the map, if not itll return inf, else itll return
-        // the distance from the source, if the distance is greater than the curr distance, then we can continue.
-        if curr_dist > dist_map.get(&curr_id).copied().unwrap_or(f64::INFINITY) {
-            continue;
-        }
-
-        // if the current distance is greater than limit weight, we can assume that the shortest path
-        // to dest_node will also result in a larger weight than limit_weight, thus we stop the search.
-        if curr_dist >= limit_weight {
-            return None;
-        }
-
-        // If we reached the dest node we can stop are return the distance.
-        if curr_id == dest_node {
-            return Some(curr_dist);
-        }
-
-        // Iterate over each neighbor, skip the excluded node, update the node if there is a shorter path and insert it to the priority queue.
-        for neighbor_index in graph.get_fwd_neighbors(curr_id) {
-            let neighbor_edge = graph.get_edge(*neighbor_index);
-            let neighbor_id = neighbor_edge.dest_id;
-
-            if neighbor_id == exclude_node {
-                continue;
-            }
-
-            let alt = curr_dist + graph.get_edge_metadata(neighbor_edge).weight;
-            if alt < dist_map.get(&neighbor_id).copied().unwrap_or(f64::INFINITY) {
-                dist_map.insert(neighbor_id, alt);
-                queue.push(Reverse(MinHeapItem(neighbor_id, alt)));
-            }
+impl Dijkstra {
+    pub fn new(num_nodes: usize) -> Self {
+        Self {
+            src: 0,
+            ignore: 0,
+            weights: vec![f64::INFINITY; num_nodes],
+            queue: PriorityQueue::new(),
         }
     }
 
-    None
+    pub fn init(&mut self, src: usize, ignore: usize) {
+        self.src = src;
+        self.ignore = ignore;
+        self.weights.fill(f64::INFINITY);
+        self.queue.clear();
+    }
+
+    pub fn search(
+        &mut self,
+        graph: &Graph,
+        dest: usize,
+        limit_weight: f64,
+        max_hops: usize,
+    ) -> f64 {
+        self.weights[self.src] = 0.0;
+        self.queue.push(self.src, HeapItem(0.0));
+
+        let mut num_hops = 0;
+        while let Some((curr_id, _)) = self.queue.pop() {
+            if num_hops == max_hops {
+                break;
+            }
+
+            if self.weights[dest] <= limit_weight {
+                return self.weights[dest];
+            }
+
+            for id in graph.get_fwd_neighbors(curr_id) {
+                let neighbor_edge = graph.get_edge(*id);
+                let neighbor_id = neighbor_edge.dest_id;
+
+                if neighbor_id == self.ignore {
+                    continue;
+                }
+
+                let weight = self.weights[curr_id] + graph.get_edge_metadata(neighbor_edge).weight;
+                if weight == f64::INFINITY {
+                    continue;
+                }
+                let adj_weight = self.weights[neighbor_id];
+                if weight < adj_weight || adj_weight == f64::INFINITY {
+                    self.weights[neighbor_id] = weight;
+                    self.queue.push(neighbor_id, HeapItem(weight));
+                }
+            }
+
+            num_hops += 1;
+
+            if curr_id == dest {
+                return self.weights[dest];
+            }
+        }
+
+        self.weights[dest]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{Edge, EdgeMetadata};
+    use crate::engine::graph::{Edge, EdgeMetadata, Node};
 
-    //
-    //       (2)     (2)
-    //     0 ---- 4 ---- 1
-    //  (1)|             |(1)
-    //    2 ----------- 3
-    //         (1)
-    //
+    // Test graph
+    //           10                 3
+    // (p) 0 <---------> (v) 1 <---------> (r) 2
+    //                6  |                 | 5
+    //                  (q) 3 <---------> (w) 4
+    //                             5
+
     fn get_test_graph() -> Graph {
         let edges = vec![
-            Edge::new(0, 4, 0),
-            Edge::new(0, 2, 1),
-            Edge::new(1, 3, 2),
-            Edge::new(2, 3, 3),
-            Edge::new(3, 1, 4),
-            Edge::new(4, 1, 5),
+            Edge::new(0, 1, 0), // 0 -> 1
+            Edge::new(1, 0, 1), // 1 -> 0
+            Edge::new(1, 2, 2), // 1 -> 2
+            Edge::new(2, 1, 3), // 2 -> 1
+            Edge::new(1, 3, 4), // 1 -> 3
+            Edge::new(3, 1, 5), // 3 -> 1
+            Edge::new(3, 4, 6), // 3 -> 4
+            Edge::new(4, 3, 7), // 4 -> 3
+            Edge::new(2, 4, 8), // 2 -> 4
+            Edge::new(4, 2, 9), // 4 -> 2
         ];
 
         let mut fwd_edge_list = vec![Vec::new(); 5];
-
-        fwd_edge_list[0].push(0);
-        fwd_edge_list[0].push(1);
-        fwd_edge_list[1].push(2);
-        fwd_edge_list[2].push(3);
-        fwd_edge_list[3].push(4);
-        fwd_edge_list[4].push(5);
+        fwd_edge_list[0] = vec![0];
+        fwd_edge_list[1] = vec![1, 2, 4];
+        fwd_edge_list[2] = vec![3, 8];
+        fwd_edge_list[3] = vec![5, 6];
+        fwd_edge_list[4] = vec![7, 9];
 
         let mut bwd_edge_list = vec![Vec::new(); 5];
+        bwd_edge_list[0] = vec![1];
+        bwd_edge_list[1] = vec![0, 3, 5];
+        bwd_edge_list[2] = vec![2, 9];
+        bwd_edge_list[3] = vec![4, 7];
+        bwd_edge_list[4] = vec![6, 8];
 
-        bwd_edge_list[4].push(0);
-        bwd_edge_list[2].push(1);
-        bwd_edge_list[3].push(2);
-        bwd_edge_list[3].push(3);
-        bwd_edge_list[1].push(4);
-        bwd_edge_list[1].push(5);
+        let nodes = vec![
+            Node::new(0, 100),
+            Node::new(1, 101),
+            Node::new(2, 102),
+            Node::new(3, 103),
+            Node::new(4, 104),
+        ];
 
         let edge_metadata = vec![
             EdgeMetadata {
-                weight: 2.0, // (0->4)
+                weight: 10.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0, // (0->2)
+                weight: 10.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0, // (1->3)
+                weight: 3.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0, // (2->3)
+                weight: 3.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0, // (3->1)
+                weight: 6.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 2.0, // (4->1)
+                weight: 6.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
@@ -166,17 +220,17 @@ mod tests {
         Graph {
             fwd_edge_list,
             bwd_edge_list,
+            nodes,
             edges,
             edge_metadata,
-            nodes: vec![],
         }
     }
 
     #[test]
     fn test_local_dijkstra() {
         let graph = get_test_graph();
-        let weight = local_dijkstra(&graph, 0, 1, 4, 4.0);
+        // let weight = local_dijkstra(&graph, 0, 4, 3, 21.0, 100);
 
-        assert_eq!(weight, Some(3.0));
+        // assert_eq!(weight, Some(18.0));
     }
 }

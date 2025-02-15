@@ -73,11 +73,12 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
         }
 
         let polyline_data = parse_polyline_data(way_data);
-        for (id1, id2) in polyline_data.iter().tuple_windows() {
-            let weight = calc_weight(*id1, *id2, &maps);
-            let node1 = osm_to_dense.get(id1).unwrap();
-            let node2 = osm_to_dense.get(id2).unwrap();
+        for (curr_id, next_id) in polyline_data.iter().tuple_windows() {
+            let weight = calc_weight(*curr_id, *next_id, &maps);
+            let curr_node = osm_to_dense.get(curr_id).unwrap();
+            let next_node = osm_to_dense.get(next_id).unwrap();
 
+            let metadata_index = edge_metadata.len();
             let metadata = EdgeMetadata {
                 weight,
                 is_one_way: way_data.is_oneway,
@@ -85,20 +86,19 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
                 name: way_data.name.clone(),
                 speed_limit: way_data.max_speed,
             };
-
-            let mut edge = Edge::new(*node1, *node2, edge_metadata.len());
-
-            fwd_edge_list[*node1].push(edges.len());
-            edges.push(edge.clone());
-
-            if !way_data.is_oneway {
-                // Push the backward edge if the way is not a one way street.
-                std::mem::swap(&mut edge.src_id, &mut edge.dest_id);
-                bwd_edge_list[*node2].push(edges.len());
-                edges.push(edge);
-            }
-
             edge_metadata.push(metadata);
+
+            let edge_index_fwd = edges.len();
+            edges.push(Edge::new(*curr_node, *next_node, metadata_index));
+            fwd_edge_list[*curr_node].push(edge_index_fwd);
+            bwd_edge_list[*next_node].push(edge_index_fwd);
+
+            if !way_data.is_oneway && curr_id != next_id {
+                let edge_index_bwd = edges.len();
+                edges.push(Edge::new(*next_node, *curr_node, metadata_index));
+                fwd_edge_list[*next_node].push(edge_index_bwd);
+                bwd_edge_list[*curr_node].push(edge_index_bwd);
+            }
         }
     }
 
@@ -178,14 +178,23 @@ fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
     reader.for_each(|elem| match elem {
         Element::DenseNode(node) => {
             let is_traffic_signal = node.tags().any(|e| e.1 == "traffic_signals");
-
             let node_data = NodeParseData {
                 dense_index: osm_id_to_node.len(),
                 lat: node.lat(),
                 lon: node.lon(),
                 is_traffic_signal,
             };
-            osm_id_to_node.insert(node.id, node_data);
+            osm_id_to_node.insert(node.id(), node_data);
+        }
+        Element::Node(node) => {
+            let is_traffic_signal = node.tags().any(|e| e.1 == "traffic_signals");
+            let node_data = NodeParseData {
+                dense_index: osm_id_to_node.len(),
+                lat: node.lat(),
+                lon: node.lon(),
+                is_traffic_signal,
+            };
+            osm_id_to_node.insert(node.id(), node_data);
         }
         Element::Way(way) => {
             let name = parse_way_name(&way);

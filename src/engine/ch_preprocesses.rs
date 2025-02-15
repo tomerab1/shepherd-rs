@@ -1,85 +1,111 @@
 use core::f64;
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
-};
+use std::cmp::Reverse;
 
-use super::{graph::Graph, witness_search::local_dijkstra};
+use super::{graph::Graph, witness_search::Dijkstra};
 use crate::engine::graph::EdgeMetadata;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct RankedNode {
-    rank: i32,
-    id: usize,
-}
+use priority_queue::PriorityQueue;
 
-impl Ord for RankedNode {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.rank.cmp(&other.rank)
+pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
+    let mut queue = PriorityQueue::new();
+    let mut ranks = vec![0usize; graph.num_nodes()];
+    let mut order = vec![0usize; graph.num_nodes()];
+
+    let node_ids: Vec<_> = graph.nodes.iter().map(|node| node.dense_id).collect();
+    for id in node_ids {
+        queue.push(id, Reverse(rank_node(overlay, dijkstra, id)));
     }
-}
 
-impl PartialOrd for RankedNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+    let mut contraction_count = 0usize;
+    while let Some((contracted_id, _)) = queue.pop() {
+        println!("{} {}", overlay.get_mem_usage_str(), queue.len());
+        ranks[contracted_id] = contraction_count;
+        order[contraction_count] = contracted_id;
 
-pub fn contract_graph(graph: &mut Graph) {
-    let mut pq = rank_nodes(graph);
+        let neighbor_rank = overlay.get_node(contracted_id).get_rank() + 1;
+        contract_node(&mut graph, overlay, dijkstra, contracted_id);
 
-    while let Some(Reverse(ranked_node)) = pq.pop() {
-        let node_id = ranked_node.id;
+        let fwd_neighbors: Vec<_> = overlay.get_fwd_neighbors(contracted_id).to_vec();
+        let bwd_neighbors: Vec<_> = overlay.get_bwd_neighbors(contracted_id).to_vec();
 
-        if graph.get_node(node_id).get_is_contracted() {
-            continue;
+        for edge_id in fwd_neighbors.iter().chain(bwd_neighbors.iter()) {
+            let edge = overlay.get_edge(*edge_id);
+            let neighbor_id = if edge.src_id == contracted_id {
+                edge.dest_id
+            } else {
+                edge.src_id
+            };
+            overlay.get_node_mut(neighbor_id).raise_rank(neighbor_rank);
+            let new_rank = rank_node(overlay, dijkstra, neighbor_id);
+            queue.change_priority(&neighbor_id, Reverse(new_rank));
         }
 
-        contract_node(graph, node_id);
-        update_neighbors_importance(graph, &mut pq, node_id);
+        remove_edges_from_neighbors(&mut graph, contracted_id);
+
+        contraction_count += 1;
     }
 }
 
-fn contract_node(graph: &mut Graph, node_id: usize) {
+fn remove_edges_from_neighbors(graph: &mut Graph, contracted_id: usize) {
+    let fwd_edges: Vec<_> = graph.fwd_edge_list[contracted_id].clone();
+    let bwd_edges: Vec<_> = graph.bwd_edge_list[contracted_id].clone();
+
+    for edge_idx in fwd_edges {
+        let edge = graph.get_edge(edge_idx).clone();
+        graph.bwd_edge_list[edge.dest_id].retain(|&e| e != edge_idx);
+    }
+
+    for edge_idx in bwd_edges {
+        let edge = graph.get_edge(edge_idx).clone();
+        graph.fwd_edge_list[edge.src_id].retain(|&e| e != edge_idx);
+    }
+
+    graph.fwd_edge_list[contracted_id].clear();
+    graph.bwd_edge_list[contracted_id].clear();
+}
+
+fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra, node_id: usize) {
     let fwd_indices = graph.get_fwd_neighbors(node_id).clone();
     let bwd_indices = graph.get_bwd_neighbors(node_id).clone();
 
-    for &fwd_edge_index in &fwd_indices {
-        let fwd_edge = graph.get_edge(fwd_edge_index).clone();
-        let w = fwd_edge.dest_id;
+    for &bwd_edge_index in &bwd_indices {
+        let bwd_edge = graph.get_edge(bwd_edge_index).clone();
+        let w = bwd_edge.src_id;
 
-        for &bwd_edge_index in &bwd_indices {
-            let bwd_edge = graph.get_edge(bwd_edge_index);
-            let v = bwd_edge.src_id;
+        dijkstra.init(w, node_id);
+        for &fwd_edge_index in &fwd_indices {
+            let fwd_edge = graph.get_edge(fwd_edge_index);
+            let v = fwd_edge.dest_id;
 
-            if v == w {
+            if v == w || v == node_id || w == node_id {
                 continue;
             }
 
-            let weight_v_u = graph.get_edge_metadata(&fwd_edge).weight;
-            let weight_u_w = graph.get_edge_metadata(bwd_edge).weight;
+            let weight_v_u = overlay.get_edge_metadata(&bwd_edge).weight;
+            let weight_u_w = overlay.get_edge_metadata(fwd_edge).weight;
             let combined_weight = weight_v_u + weight_u_w;
 
-            let witness_weight =
-                local_dijkstra(graph, v, w, node_id, combined_weight).unwrap_or(f64::INFINITY);
+            let witness_weight = dijkstra.search(graph, v, combined_weight, usize::MAX);
 
-            if witness_weight >= combined_weight {
-                let node = graph.get_node_mut(node_id);
-                node.set_is_contracted(true);
-                add_shortcut(graph, v, w, combined_weight, bwd_edge_index, fwd_edge_index);
+            if witness_weight > combined_weight {
+                add_shortcut(
+                    overlay,
+                    w,
+                    v,
+                    combined_weight,
+                    bwd_edge_index,
+                    fwd_edge_index,
+                );
+                add_shortcut(graph, w, v, combined_weight, bwd_edge_index, fwd_edge_index);
             }
         }
     }
-
-    graph.fwd_edge_list[node_id].clear();
-    graph.bwd_edge_list[node_id].clear();
 }
 
 fn add_shortcut(
     graph: &mut Graph,
-    v: usize,
     w: usize,
+    v: usize,
     combined_weight: f64,
     left_edge_index: usize,
     right_edge_index: usize,
@@ -88,58 +114,31 @@ fn add_shortcut(
         weight: combined_weight,
         speed_limit: None,
         name: None,
-        is_one_way: false,
+        is_one_way: true, // Ensure shortcut is directed
         is_roundabout: false,
     };
 
     let metadata_index = graph.edge_metadata.len();
     graph.edge_metadata.push(shortcut_metadata);
-    graph.add_shortcut_edge(v, w, metadata_index, left_edge_index, right_edge_index);
+    graph.add_shortcut_edge(w, v, metadata_index, left_edge_index, right_edge_index);
 }
 
-fn update_neighbors_importance(
-    graph: &mut Graph,
-    pq: &mut BinaryHeap<Reverse<RankedNode>>,
-    node_id: usize,
-) {
-    let fwd_indices = graph.get_fwd_neighbors(node_id).clone();
-    let bwd_indices = graph.get_bwd_neighbors(node_id).clone();
-
-    let mut neighbors = Vec::new();
-    for &edge_id in &fwd_indices {
-        neighbors.push(graph.get_edge(edge_id).dest_id);
-    }
-    for &edge_id in &bwd_indices {
-        neighbors.push(graph.get_edge(edge_id).dest_id);
-    }
-
-    // re-rank
-    for neighbor_id in neighbors {
-        if !graph.get_node(neighbor_id).get_is_contracted() {
-            let new_rank = rank_node(graph, neighbor_id);
-            pq.push(Reverse(RankedNode {
-                rank: new_rank,
-                id: neighbor_id,
-            }));
-        }
-    }
-}
-
-fn rank_node(graph: &Graph, node_index: usize) -> i32 {
+fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
     let in_deg = graph.bwd_edge_list[node_index].len() as i32;
     let out_deg = graph.fwd_edge_list[node_index].len() as i32;
     let node_degree = in_deg + out_deg;
     let mut num_contracted = 0i32;
 
-    for fwd_edge_index in graph.get_fwd_neighbors(node_index) {
-        let fwd_edge = graph.get_edge(*fwd_edge_index);
-        let fwd_dest_id = fwd_edge.dest_id;
+    for bwd_edge_index in graph.get_bwd_neighbors(node_index) {
+        let bwd_edge = graph.get_edge(*bwd_edge_index);
+        let bwd_src_id = bwd_edge.src_id;
 
-        for bwd_edge_index in graph.get_bwd_neighbors(node_index) {
-            let bwd_edge = graph.get_edge(*bwd_edge_index);
-            let bwd_dest_id = bwd_edge.dest_id;
+        dijkstra.init(bwd_src_id, node_index);
+        for fwd_edge_index in graph.get_fwd_neighbors(node_index) {
+            let fwd_edge = graph.get_edge(*fwd_edge_index);
+            let fwd_dest_id = fwd_edge.dest_id;
 
-            if fwd_dest_id == bwd_dest_id {
+            if fwd_dest_id == bwd_src_id {
                 continue;
             }
 
@@ -147,73 +146,58 @@ fn rank_node(graph: &Graph, node_index: usize) -> i32 {
             let weight_u_w = graph.get_edge_metadata(bwd_edge).weight;
             let combined_weight = weight_u_w + weight_v_u;
 
-            let witness_weight =
-                local_dijkstra(graph, fwd_dest_id, bwd_dest_id, node_index, combined_weight)
-                    .unwrap_or(f64::INFINITY);
-
+            let witness_weight = dijkstra.search(graph, fwd_dest_id, combined_weight, usize::MAX);
             if witness_weight > combined_weight {
                 num_contracted += 1;
             }
         }
     }
 
-    node_degree - num_contracted
-}
-
-// Ranks all the nodes in parallel and collect them into a min-heap
-pub fn rank_nodes(graph: &Graph) -> BinaryHeap<Reverse<RankedNode>> {
-    let ranks: BinaryHeap<Reverse<RankedNode>> = graph
-        .get_nodes()
-        .par_iter()
-        .map(|node| {
-            Reverse(RankedNode {
-                rank: rank_node(graph, node.dense_id),
-                id: node.dense_id,
-            })
-        })
-        .collect();
-
-    ranks
+    num_contracted - node_degree
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::{
-        builder::from_osmpbf,
+        ch_query,
         graph::{Edge, EdgeMetadata, Graph, Node},
     };
 
     // Test graph
-    //       (2)     (2)
-    //     0 ---- 4 ---- 1
-    // (1) |             | (1)
-    //    2 ----------- 3
-    //           (1)
+    //           10                 3
+    // (p) 0 <---------> (v) 1 <---------> (r) 2
+    //                6  |                 | 5
+    //                  (q) 3 <---------> (w) 4
+    //                             5
 
     fn get_test_graph() -> Graph {
         let edges = vec![
-            Edge::new(0, 4, 0),
-            Edge::new(0, 2, 1),
-            Edge::new(1, 3, 2),
-            Edge::new(2, 3, 3),
-            Edge::new(3, 1, 4),
-            Edge::new(4, 1, 5),
+            Edge::new(0, 1, 0), // 0 -> 1
+            Edge::new(1, 0, 1), // 1 -> 0
+            Edge::new(1, 2, 2), // 1 -> 2
+            Edge::new(2, 1, 3), // 2 -> 1
+            Edge::new(1, 3, 4), // 1 -> 3
+            Edge::new(3, 1, 5), // 3 -> 1
+            Edge::new(3, 4, 6), // 3 -> 4
+            Edge::new(4, 3, 7), // 4 -> 3
+            Edge::new(2, 4, 8), // 2 -> 4
+            Edge::new(4, 2, 9), // 4 -> 2
         ];
 
         let mut fwd_edge_list = vec![Vec::new(); 5];
-        fwd_edge_list[0] = vec![0, 1];
-        fwd_edge_list[1] = vec![2];
-        fwd_edge_list[2] = vec![3];
-        fwd_edge_list[3] = vec![4];
-        fwd_edge_list[4] = vec![5];
+        fwd_edge_list[0] = vec![0];
+        fwd_edge_list[1] = vec![1, 2, 4];
+        fwd_edge_list[2] = vec![3, 8];
+        fwd_edge_list[3] = vec![5, 6];
+        fwd_edge_list[4] = vec![7, 9];
 
         let mut bwd_edge_list = vec![Vec::new(); 5];
-        bwd_edge_list[0] = vec![];
-        bwd_edge_list[1] = vec![4, 5];
-        bwd_edge_list[2] = vec![1];
-        bwd_edge_list[3] = vec![2, 3];
-        bwd_edge_list[4] = vec![0];
+        bwd_edge_list[0] = vec![1];
+        bwd_edge_list[1] = vec![0, 3, 5];
+        bwd_edge_list[2] = vec![2, 9];
+        bwd_edge_list[3] = vec![4, 7];
+        bwd_edge_list[4] = vec![6, 8];
 
         let nodes = vec![
             Node::new(0, 100),
@@ -225,42 +209,70 @@ mod tests {
 
         let edge_metadata = vec![
             EdgeMetadata {
-                weight: 2.0,
+                weight: 10.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0,
+                weight: 10.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 2.0,
+                weight: 3.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 2.0,
+                weight: 3.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 1.0,
+                weight: 6.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 2.0,
+                weight: 6.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 5.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
@@ -277,43 +289,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ranking() {
-        let graph = get_test_graph();
-
-        for node in graph.get_nodes() {
-            let r = rank_node(&graph, node.dense_id);
-            println!("Node={} rank={}", node.dense_id, r);
-        }
-
-        let all_ranks = rank_nodes(&graph);
-        for std::cmp::Reverse(rn) in all_ranks {
-            println!("Node={} final_rank={}", rn.id, rn.rank);
-        }
-    }
+    // Test graph
+    //           10                 3
+    // (p) 0 <---------> (v) 1 <---------> (r) 2
+    //                6  |                 | 5
+    //                  (q) 3 <---------> (w) 4
+    //                             5
 
     #[test]
     fn test_graph_contraction() {
-        let mut graph = get_test_graph();
-        contract_graph(&mut graph);
+        let graph = get_test_graph();
+        let mut overlay = get_test_graph();
+        let mut dijkstra = Dijkstra::new(overlay.num_nodes());
 
-        for node in graph.nodes.iter() {
+        for node in &overlay.nodes {
+            println!("{}", rank_node(&graph, &mut dijkstra, node.dense_id));
+        }
+
+        contract_graph(graph, &mut overlay, &mut dijkstra);
+
+        for node in &overlay.nodes {
             println!("{:?}", node);
+
+            for edge in overlay.get_fwd_neighbors(node.dense_id) {
+                if overlay.get_edge(*edge).is_shortcut() {
+                    println!("{:?}", overlay.get_edge(*edge));
+                }
+            }
+            println!("\n\n");
         }
 
-        for edge in graph.edges.iter() {
-            println!("{:?}", edge);
-        }
-
-        for metadata in graph.edge_metadata.iter() {
-            println!("{:?}", metadata);
-        }
-    }
-
-    #[test]
-    fn test() {
-        let mut graph = from_osmpbf("tests/data/nz-car-only.osm.pbf").unwrap();
-
-        contract_graph(&mut graph);
+        println!("{:?}", ch_query::bfs(&overlay, 1, 4));
+        println!("{:?}", ch_query::bi_dir_dijkstra(&overlay, 4, 1));
     }
 }

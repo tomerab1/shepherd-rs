@@ -1,2 +1,11 @@
 /target
 log.txt
+data/graph.bin
+tests/data/nes-zionna.osm
+tests/data/nes-zionna.osm.pbf
+.gitignore
+tests/data/nz-car-only.osm
+.gitignore
+tests/data/ns.osm
+.gitignore
+tests/data/ns.osm.pbf
