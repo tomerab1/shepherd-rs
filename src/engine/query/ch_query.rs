@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use priority_queue::PriorityQueue;
 
-use super::graph::Graph;
+use crate::engine::preprocess::graph::Graph;
 
 #[derive(Copy, Clone, Debug)]
 struct HeapItem(f64);

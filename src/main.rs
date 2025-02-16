@@ -5,8 +5,10 @@ use std::{
 };
 
 use routing_engine::engine::{
-    builder::from_osmpbf, ch_preprocesses::contract_graph, ch_query, graph::Graph,
-    witness_search::Dijkstra,
+    preprocess::{
+        builder::from_osmpbf, ch_preprocess::contract_graph, graph::Graph, witness_search::Dijkstra,
+    },
+    query::ch_query,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -39,7 +41,7 @@ fn main() -> anyhow::Result<()> {
         let graph: Graph = bincode::deserialize(&buf)?;
 
         let id1 = graph.nodes.iter().find(|n| n.osm_id == 2229280888).unwrap();
-        let id2 = graph.nodes.iter().find(|n| n.osm_id == 2232385905).unwrap();
+        let id2 = graph.nodes.iter().find(|n| n.osm_id == 2232385899).unwrap();
 
         let now = Instant::now();
         println!(
@@ -52,12 +54,13 @@ fn main() -> anyhow::Result<()> {
         println!("Elapsed: {:.2?}", elapsed);
 
         let now = Instant::now();
-        println!(
-            "{} -> {} = {:#?}",
-            id1.osm_id,
-            id2.osm_id,
-            ch_query::bi_dir_dijkstra(&graph, id1.dense_id, id2.dense_id)
-        );
+        let query_res = ch_query::bi_dir_dijkstra(&graph, id1.dense_id, id2.dense_id);
+        println!("{} -> {} = {:#?}", id1.osm_id, id2.osm_id, query_res);
+
+        for id in query_res.unwrap() {
+            println!("{}", graph.get_node(id).osm_id);
+        }
+
         let elapsed = now.elapsed();
         println!("Elapsed: {:.2?}", elapsed);
     }

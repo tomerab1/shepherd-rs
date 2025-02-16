@@ -1,21 +1,31 @@
 use core::f64;
-use std::cmp::Reverse;
+use std::{
+    cmp::Reverse,
+    sync::{Arc, Mutex},
+};
 
+use super::graph::EdgeMetadata;
 use super::{graph::Graph, witness_search::Dijkstra};
-use crate::engine::graph::EdgeMetadata;
 
 use priority_queue::PriorityQueue;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
-    let mut queue = PriorityQueue::new();
+    let queue = Arc::new(Mutex::new(PriorityQueue::new()));
     let mut ranks = vec![0usize; graph.num_nodes()];
     let mut order = vec![0usize; graph.num_nodes()];
 
-    let node_ids: Vec<_> = graph.nodes.iter().map(|node| node.dense_id).collect();
-    for id in node_ids {
-        queue.push(id, Reverse(rank_node(overlay, dijkstra, id)));
-    }
+    let node_ids: Vec<_> = graph.nodes.par_iter().map(|node| node.dense_id).collect();
+    let num_nodes = node_ids.len();
+    node_ids.into_par_iter().for_each(|id| {
+        let mut dijkstra = Dijkstra::new(num_nodes);
+        queue
+            .lock()
+            .unwrap()
+            .push(id, Reverse(rank_node(overlay, &mut dijkstra, id)));
+    });
 
+    let mut queue = queue.lock().unwrap();
     let mut contraction_count = 0usize;
     while let Some((contracted_id, _)) = queue.pop() {
         println!("{} {}", overlay.get_mem_usage_str(), queue.len());
@@ -85,7 +95,7 @@ fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra
             let weight_u_w = overlay.get_edge_metadata(fwd_edge).weight;
             let combined_weight = weight_v_u + weight_u_w;
 
-            let witness_weight = dijkstra.search(graph, v, combined_weight, usize::MAX);
+            let witness_weight = dijkstra.search(graph, v, combined_weight, graph.num_edges() / 2);
 
             if witness_weight > combined_weight {
                 add_shortcut(
@@ -114,7 +124,7 @@ fn add_shortcut(
         weight: combined_weight,
         speed_limit: None,
         name: None,
-        is_one_way: true, // Ensure shortcut is directed
+        is_one_way: true,
         is_roundabout: false,
     };
 
@@ -146,7 +156,8 @@ fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
             let weight_u_w = graph.get_edge_metadata(bwd_edge).weight;
             let combined_weight = weight_u_w + weight_v_u;
 
-            let witness_weight = dijkstra.search(graph, fwd_dest_id, combined_weight, usize::MAX);
+            let witness_weight =
+                dijkstra.search(graph, fwd_dest_id, combined_weight, graph.num_nodes() / 2);
             if witness_weight > combined_weight {
                 num_contracted += 1;
             }
@@ -158,53 +169,95 @@ fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::engine::{
-        ch_query,
-        graph::{Edge, EdgeMetadata, Graph, Node},
+        preprocess::graph::{Edge, Node},
+        query::ch_query,
     };
 
-    // Test graph
-    //           10                 3
-    // (p) 0 <---------> (v) 1 <---------> (r) 2
-    //                6  |                 | 5
-    //                  (q) 3 <---------> (w) 4
-    //                             5
+    use super::*;
 
+    // Test graph
     fn get_test_graph() -> Graph {
+        // Node mapping:
+        // 0: 1
+        // 1: 3
+        // 2: 4
+        // 3: 5
+        // 4: 6
+        // 5: 7
+        // 6: 8
+        //
+        // Graph drawing:
+        //  1 -- 3 -- 4 ---> 5 ---> 6 -- 7
+        //             \           /
+        //              <--- 8 <---
+        //
+        // All edges are bidirectional.
+        //
+        // We create the following bidirectional edges:
+        // 0 <-> 1   (represents 1 -- 3)
+        // 1 <-> 2   (represents 3 -- 4)
+        // 2 <-> 3   (represents 4 ---> 5)
+        // 3 <-> 4   (represents 5 ---> 6)
+        // 4 <-> 5   (represents 6 -- 7)
+        // 2 <-> 6   (represents connection between 4 and 8)
+        // 4 <-> 6   (represents connection between 6 and 8)
+
         let edges = vec![
-            Edge::new(0, 1, 0), // 0 -> 1
-            Edge::new(1, 0, 1), // 1 -> 0
-            Edge::new(1, 2, 2), // 1 -> 2
-            Edge::new(2, 1, 3), // 2 -> 1
-            Edge::new(1, 3, 4), // 1 -> 3
-            Edge::new(3, 1, 5), // 3 -> 1
-            Edge::new(3, 4, 6), // 3 -> 4
-            Edge::new(4, 3, 7), // 4 -> 3
-            Edge::new(2, 4, 8), // 2 -> 4
-            Edge::new(4, 2, 9), // 4 -> 2
+            // Edge between node 0 and node 1 (1 <-> 3)
+            Edge::new(0, 1, 0), // 0 -> 1, weight 10.0
+            Edge::new(1, 0, 1), // 1 -> 0, weight 10.0
+            // Edge between node 1 and node 2 (3 <-> 4)
+            Edge::new(1, 2, 2), // 1 -> 2, weight 3.0
+            Edge::new(2, 1, 3), // 2 -> 1, weight 3.0
+            // Edge between node 2 and node 3 (4 <-> 5)
+            Edge::new(2, 3, 4), // 2 -> 3, weight 6.0
+            Edge::new(3, 2, 5), // 3 -> 2, weight 6.0
+            // Edge between node 3 and node 4 (5 <-> 6)
+            Edge::new(3, 4, 6), // 3 -> 4, weight 7.0
+            Edge::new(4, 3, 7), // 4 -> 3, weight 7.0
+            // Edge between node 4 and node 5 (6 <-> 7)
+            Edge::new(4, 5, 8), // 4 -> 5, weight 8.0
+            Edge::new(5, 4, 9), // 5 -> 4, weight 8.0
+            // Lower branch: Edge between node 2 and node 6 (4 <-> 8)
+            Edge::new(2, 6, 10), // 2 -> 6, weight 9.0
+            Edge::new(6, 2, 11), // 6 -> 2, weight 9.0
+            // Lower branch: Edge between node 4 and node 6 (6 <-> 8)
+            Edge::new(4, 6, 12), // 4 -> 6, weight 4.0
+            Edge::new(6, 4, 13), // 6 -> 4, weight 4.0
         ];
 
-        let mut fwd_edge_list = vec![Vec::new(); 5];
-        fwd_edge_list[0] = vec![0];
-        fwd_edge_list[1] = vec![1, 2, 4];
-        fwd_edge_list[2] = vec![3, 8];
-        fwd_edge_list[3] = vec![5, 6];
-        fwd_edge_list[4] = vec![7, 9];
+        // Build the forward edge list.
+        // For each node, list the indices in `edges` for which the node is the source.
+        let mut fwd_edge_list = vec![Vec::new(); 7];
+        fwd_edge_list[0] = vec![0]; // node 0: 0 -> 1
+        fwd_edge_list[1] = vec![1, 2]; // node 1: 1 -> 0 and 1 -> 2
+        fwd_edge_list[2] = vec![3, 4, 10]; // node 2: 2 -> 1, 2 -> 3, 2 -> 6
+        fwd_edge_list[3] = vec![5, 6]; // node 3: 3 -> 2, 3 -> 4
+        fwd_edge_list[4] = vec![7, 8, 12]; // node 4: 4 -> 3, 4 -> 5, 4 -> 6
+        fwd_edge_list[5] = vec![9]; // node 5: 5 -> 4
+        fwd_edge_list[6] = vec![11, 13]; // node 6: 6 -> 2, 6 -> 4
 
-        let mut bwd_edge_list = vec![Vec::new(); 5];
-        bwd_edge_list[0] = vec![1];
-        bwd_edge_list[1] = vec![0, 3, 5];
-        bwd_edge_list[2] = vec![2, 9];
-        bwd_edge_list[3] = vec![4, 7];
-        bwd_edge_list[4] = vec![6, 8];
+        // Build the backward edge list.
+        // For each node, list the indices in `edges` for which the node is the target.
+        let mut bwd_edge_list = vec![Vec::new(); 7];
+        bwd_edge_list[0] = vec![1]; // node 0: incoming edge from 1 -> 0
+        bwd_edge_list[1] = vec![0, 3]; // node 1: incoming from 0 -> 1 and 2 -> 1
+        bwd_edge_list[2] = vec![2, 5, 11]; // node 2: incoming from 1 -> 2, 3 -> 2, and 6 -> 2
+        bwd_edge_list[3] = vec![4, 7]; // node 3: incoming from 2 -> 3 and 4 -> 3
+        bwd_edge_list[4] = vec![6, 9, 13]; // node 4: incoming from 3 -> 4, 5 -> 4, and 6 -> 4
+        bwd_edge_list[5] = vec![8]; // node 5: incoming from 4 -> 5
+        bwd_edge_list[6] = vec![10, 12]; // node 6: incoming from 2 -> 6 and 4 -> 6
 
+        // Create nodes. The second parameter can be used for importance, id, or any associated data.
         let nodes = vec![
-            Node::new(0, 100),
-            Node::new(1, 101),
-            Node::new(2, 102),
-            Node::new(3, 103),
-            Node::new(4, 104),
+            Node::new(0, 101), // represents original "1"
+            Node::new(1, 103), // represents original "3"
+            Node::new(2, 104), // represents original "4"
+            Node::new(3, 105), // represents original "5"
+            Node::new(4, 106), // represents original "6"
+            Node::new(5, 107), // represents original "7"
+            Node::new(6, 108), // represents original "8"
         ];
 
         let edge_metadata = vec![
@@ -251,28 +304,56 @@ mod tests {
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 5.0,
+                weight: 7.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 5.0,
+                weight: 7.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 5.0,
+                weight: 8.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
                 is_roundabout: false,
             },
             EdgeMetadata {
-                weight: 5.0,
+                weight: 8.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 9.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 9.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 4.0,
+                name: None,
+                speed_limit: None,
+                is_one_way: false,
+                is_roundabout: false,
+            },
+            EdgeMetadata {
+                weight: 4.0,
                 name: None,
                 speed_limit: None,
                 is_one_way: false,
@@ -288,13 +369,6 @@ mod tests {
             edge_metadata,
         }
     }
-
-    // Test graph
-    //           10                 3
-    // (p) 0 <---------> (v) 1 <---------> (r) 2
-    //                6  |                 | 5
-    //                  (q) 3 <---------> (w) 4
-    //                             5
 
     #[test]
     fn test_graph_contraction() {
@@ -312,14 +386,12 @@ mod tests {
             println!("{:?}", node);
 
             for edge in overlay.get_fwd_neighbors(node.dense_id) {
-                if overlay.get_edge(*edge).is_shortcut() {
-                    println!("{:?}", overlay.get_edge(*edge));
-                }
+                println!("{:?}", overlay.get_edge(*edge));
             }
             println!("\n\n");
         }
 
         println!("{:?}", ch_query::bfs(&overlay, 1, 4));
-        println!("{:?}", ch_query::bi_dir_dijkstra(&overlay, 4, 1));
+        println!("{:?}", ch_query::bi_dir_dijkstra(&overlay, 1, 4));
     }
 }

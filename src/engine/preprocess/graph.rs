@@ -1,5 +1,4 @@
 use humansize::{format_size, DECIMAL};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 /// A way node.

@@ -3,7 +3,7 @@ use osmpbf::{Element, ElementReader, Way};
 use std::collections::BTreeMap;
 
 use super::graph::{Edge, EdgeMetadata, Graph, Node};
-use super::utils;
+use crate::engine::utils;
 
 #[derive(Debug, Clone)]
 struct NodeParseData {

@@ -40,8 +40,15 @@ impl Dijkstra {
     }
 
     pub fn init(&mut self, src: usize, ignore: usize) {
+        self.reset();
+
         self.src = src;
         self.ignore = ignore;
+        self.queue.push(self.src, HeapItem(0.0));
+        self.weights[self.src] = 0.0;
+    }
+
+    fn reset(&mut self) {
         self.weights.fill(f64::INFINITY);
         self.queue.clear();
     }
@@ -53,9 +60,6 @@ impl Dijkstra {
         limit_weight: f64,
         max_hops: usize,
     ) -> f64 {
-        self.weights[self.src] = 0.0;
-        self.queue.push(self.src, HeapItem(0.0));
-
         let mut num_hops = 0;
         while let Some((curr_id, _)) = self.queue.pop() {
             if num_hops == max_hops {
@@ -98,8 +102,9 @@ impl Dijkstra {
 
 #[cfg(test)]
 mod tests {
+    use crate::engine::preprocess::graph::{Edge, EdgeMetadata, Node};
+
     use super::*;
-    use crate::engine::graph::{Edge, EdgeMetadata, Node};
 
     // Test graph
     //           10                 3
