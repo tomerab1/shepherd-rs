@@ -105,8 +105,17 @@ fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra
                     combined_weight,
                     bwd_edge_index,
                     fwd_edge_index,
+                    node_id,
                 );
-                add_shortcut(graph, w, v, combined_weight, bwd_edge_index, fwd_edge_index);
+                add_shortcut(
+                    graph,
+                    w,
+                    v,
+                    combined_weight,
+                    bwd_edge_index,
+                    fwd_edge_index,
+                    node_id,
+                );
             }
         }
     }
@@ -119,6 +128,7 @@ fn add_shortcut(
     combined_weight: f64,
     left_edge_index: usize,
     right_edge_index: usize,
+    via_node: usize,
 ) {
     let shortcut_metadata = EdgeMetadata {
         weight: combined_weight,
@@ -130,7 +140,14 @@ fn add_shortcut(
 
     let metadata_index = graph.edge_metadata.len();
     graph.edge_metadata.push(shortcut_metadata);
-    graph.add_shortcut_edge(w, v, metadata_index, left_edge_index, right_edge_index);
+    graph.add_shortcut_edge(
+        w,
+        v,
+        metadata_index,
+        left_edge_index,
+        right_edge_index,
+        via_node,
+    );
 }
 
 fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
@@ -171,7 +188,10 @@ fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
 mod tests {
     use crate::engine::{
         preprocess::graph::{Edge, Node},
-        query::ch_query,
+        query::{
+            self,
+            ch_query::{self, BiDirDijkstra},
+        },
     };
 
     use super::*;
@@ -372,6 +392,7 @@ mod tests {
 
     #[test]
     fn test_graph_contraction() {
+        // TODO: Chnage tests to use the csr graph. maybe move the code to integration testing folder
         let graph = get_test_graph();
         let mut overlay = get_test_graph();
         let mut dijkstra = Dijkstra::new(overlay.num_nodes());
@@ -391,7 +412,9 @@ mod tests {
             println!("\n\n");
         }
 
-        println!("{:?}", ch_query::bfs(&overlay, 1, 4));
-        println!("{:?}", ch_query::bi_dir_dijkstra(&overlay, 1, 4));
+        // let query = BiDirDijkstra::new(overlay.num_nodes());
+        // query.init(1, 4);
+
+        // println!("{:?}", query.search(overlay));
     }
 }

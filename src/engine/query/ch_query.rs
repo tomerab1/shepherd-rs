@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use priority_queue::PriorityQueue;
 
-use crate::engine::preprocess::graph::Graph;
+use crate::engine::csr::csr_graph::CSRGraph;
 
 #[derive(Copy, Clone, Debug)]
 struct HeapItem(f64);
@@ -27,146 +27,138 @@ impl Ord for HeapItem {
     }
 }
 
-pub fn bi_dir_dijkstra(overlay: &Graph, src: usize, dest: usize) -> Option<Vec<usize>> {
-    let mut forward_dist = vec![f64::INFINITY; overlay.num_nodes()];
-    let mut backward_dist = vec![f64::INFINITY; overlay.num_nodes()];
-    let mut forward_prev = vec![None; overlay.num_nodes()];
-    let mut backward_prev = vec![None; overlay.num_nodes()];
-
-    let mut forward_queue = PriorityQueue::new();
-    let mut backward_queue = PriorityQueue::new();
-
-    forward_dist[src] = 0.0;
-    backward_dist[dest] = 0.0;
-    forward_queue.push(src, HeapItem(0.0));
-    backward_queue.push(dest, HeapItem(0.0));
-
-    let mut meeting_node = None;
-
-    while !forward_queue.is_empty() && !backward_queue.is_empty() {
-        if let Some((u, _)) = forward_queue.pop() {
-            for id in overlay.get_fwd_neighbors(u) {
-                let edge = overlay.get_edge(*id);
-                let v = edge.dest_id;
-                let weight = overlay.get_edge_metadata(edge).weight;
-
-                let node = overlay.get_node(v);
-
-                if node.rank < overlay.get_node(u).rank {
-                    continue;
-                }
-
-                let alt = forward_dist[u] + weight;
-                if alt < forward_dist[v] {
-                    forward_dist[v] = alt;
-                    forward_prev[v] = Some(u);
-                    forward_queue.push(v, HeapItem(alt));
-                }
-
-                if backward_dist[v] != f64::INFINITY {
-                    meeting_node = Some(v);
-                    break;
-                }
-            }
-        }
-
-        if let Some((u, _)) = backward_queue.pop() {
-            for id in overlay.get_bwd_neighbors(u) {
-                let edge = overlay.get_edge(*id);
-                let v = edge.src_id;
-                let weight = overlay.get_edge_metadata(edge).weight;
-
-                let node = overlay.get_node(v);
-
-                if node.rank < overlay.get_node(u).rank {
-                    continue;
-                }
-
-                let alt = backward_dist[u] + weight;
-                if alt < backward_dist[v] {
-                    backward_dist[v] = alt;
-                    backward_prev[v] = Some(u);
-                    backward_queue.push(v, HeapItem(alt));
-                }
-
-                if forward_dist[v] != f64::INFINITY {
-                    meeting_node = Some(v);
-                    break;
-                }
-            }
-        }
-
-        if meeting_node.is_some() {
-            break;
-        }
-    }
-
-    meeting_node.map(|node| {
-        let mut path = Vec::new();
-        let mut current = node;
-
-        while let Some(prev) = forward_prev[current] {
-            path.push(prev);
-            current = prev;
-        }
-
-        path.reverse();
-        current = node;
-
-        while let Some(prev) = backward_prev[current] {
-            path.push(prev);
-            current = prev;
-        }
-
-        path
-    })
+pub struct BiDirDijkstra {
+    src: usize,
+    dest: usize,
+    fwd_weights: Vec<f64>,
+    fwd_prev: Vec<Option<usize>>,
+    bwd_weights: Vec<f64>,
+    bwd_prev: Vec<Option<usize>>,
+    fwd_queue: PriorityQueue<usize, HeapItem>,
+    bwd_queue: PriorityQueue<usize, HeapItem>,
 }
 
-use std::collections::VecDeque;
+impl BiDirDijkstra {
+    pub fn new(num_nodes: usize) -> Self {
+        let fwd_weights = vec![f64::INFINITY; num_nodes];
+        let bwd_weights = vec![f64::INFINITY; num_nodes];
+        let fwd_prev = vec![None; num_nodes];
+        let bwd_prev = vec![None; num_nodes];
 
-pub fn bfs(graph: &Graph, start: usize, end: usize) -> Option<Vec<(usize, i32)>> {
-    if start == end {
-        return Some(vec![(start, 0)]);
-    }
+        let fwd_queue = PriorityQueue::new();
+        let bwd_queue = PriorityQueue::new();
 
-    let n = graph.num_nodes();
-    let mut visited = vec![false; n];
-    let mut parent = vec![None; n];
-
-    let mut queue = VecDeque::new();
-    visited[start] = true;
-    queue.push_back(start);
-
-    while let Some(current_node) = queue.pop_front() {
-        for &edge_id in &graph.fwd_edge_list[current_node] {
-            let edge = &graph.edges[edge_id];
-            let neighbor = edge.dest_id;
-
-            if !visited[neighbor] {
-                visited[neighbor] = true;
-                parent[neighbor] = Some(current_node);
-                queue.push_back(neighbor);
-
-                if neighbor == end {
-                    let rank = graph.get_node(end).get_rank();
-                    let mut path = vec![(end, rank)];
-                    let mut p = current_node;
-
-                    while p != start {
-                        let rank = graph.get_node(p).get_rank();
-                        path.push((p, rank));
-                        p = parent[p].unwrap();
-                    }
-
-                    let rank = graph.get_node(start).get_rank();
-                    path.push((start, rank));
-                    path.reverse();
-
-                    return Some(path);
-                }
-            }
+        Self {
+            src: 0,
+            dest: 0,
+            fwd_weights,
+            bwd_weights,
+            bwd_prev,
+            fwd_prev,
+            fwd_queue,
+            bwd_queue,
         }
     }
 
-    None
+    pub fn init(&mut self, src: usize, dest: usize) {
+        self.reset();
+
+        self.src = src;
+        self.dest = dest;
+
+        self.fwd_queue.push(self.src, HeapItem(0.0));
+        self.fwd_weights[self.src] = 0.0;
+
+        self.bwd_queue.push(self.dest, HeapItem(0.0));
+        self.bwd_weights[self.dest] = 0.0;
+    }
+
+    fn reset(&mut self) {
+        self.fwd_weights.fill(f64::INFINITY);
+        self.bwd_weights.fill(f64::INFINITY);
+        self.fwd_prev.fill(None);
+        self.bwd_prev.fill(None);
+        self.fwd_queue.clear();
+        self.bwd_queue.clear();
+    }
+
+    fn get_path_ids(&mut self, meeting_node: Option<usize>) -> Option<Vec<usize>> {
+        meeting_node.map(|node| {
+            let mut path = Vec::new();
+            let mut current = node;
+
+            while let Some(prev) = self.fwd_prev[current] {
+                path.push(prev);
+                current = prev;
+            }
+
+            path.reverse();
+            current = node;
+
+            while let Some(prev) = self.bwd_prev[current] {
+                path.push(prev);
+                current = prev;
+            }
+
+            path
+        })
+    }
+
+    pub fn search(&mut self, graph: &CSRGraph) -> Option<Vec<usize>> {
+        let mut meeting_node = None;
+
+        while !self.fwd_queue.is_empty() && !self.bwd_queue.is_empty() {
+            if let Some((u, _)) = self.fwd_queue.pop() {
+                for edge in graph.fwd_neighbors(u) {
+                    let v = edge.dest;
+                    let weight = edge.weight;
+
+                    if graph.nodes[v].rank < graph.nodes[u].rank {
+                        continue;
+                    }
+
+                    let alt = self.fwd_weights[u] + weight;
+                    if alt < self.fwd_weights[v] {
+                        self.fwd_weights[v] = alt;
+                        self.fwd_prev[v] = Some(u);
+                        self.fwd_queue.push(v, HeapItem(alt));
+                    }
+
+                    if self.bwd_weights[v] != f64::INFINITY {
+                        meeting_node = Some(v);
+                        break;
+                    }
+                }
+            }
+
+            if let Some((u, _)) = self.bwd_queue.pop() {
+                for edge in graph.bwd_neighbors(u) {
+                    let v = edge.src;
+                    let weight = edge.weight;
+
+                    if graph.nodes[v].rank < graph.nodes[u].rank {
+                        continue;
+                    }
+
+                    let alt = self.bwd_weights[u] + weight;
+                    if alt < self.bwd_weights[v] {
+                        self.bwd_weights[v] = alt;
+                        self.bwd_prev[v] = Some(u);
+                        self.bwd_queue.push(v, HeapItem(alt));
+                    }
+
+                    if self.fwd_weights[v] != f64::INFINITY {
+                        meeting_node = Some(v);
+                        break;
+                    }
+                }
+            }
+
+            if meeting_node.is_some() {
+                break;
+            }
+        }
+
+        self.get_path_ids(meeting_node)
+    }
 }

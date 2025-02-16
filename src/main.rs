@@ -5,10 +5,11 @@ use std::{
 };
 
 use routing_engine::engine::{
+    csr::csr_graph::{self, CSRGraph},
     preprocess::{
         builder::from_osmpbf, ch_preprocess::contract_graph, graph::Graph, witness_search::Dijkstra,
     },
-    query::ch_query,
+    query::ch_query::{self, BiDirDijkstra},
 };
 
 fn main() -> anyhow::Result<()> {
@@ -30,39 +31,32 @@ fn main() -> anyhow::Result<()> {
         contract_graph(graph, &mut overlay, &mut dijkstra);
         println!("FINISHED CONTRACTION");
 
+        let csr_graph = CSRGraph::from_preprocessed_graph(overlay);
+
         let mut file = File::create_new("./data/graph.bin")?;
-        let bytes = bincode::serialize(&overlay)?;
+        let bytes = bincode::serialize(&csr_graph)?;
         file.write_all(&bytes)?;
     } else {
         let mut file = File::open("./data/graph.bin")?;
         let mut buf = vec![0u8; file.metadata().unwrap().len() as usize];
 
         file.read_exact(&mut buf)?;
-        let graph: Graph = bincode::deserialize(&buf)?;
+        let graph: CSRGraph = bincode::deserialize(&buf)?;
 
         let id1 = graph.nodes.iter().find(|n| n.osm_id == 2229280888).unwrap();
         let id2 = graph.nodes.iter().find(|n| n.osm_id == 2232385899).unwrap();
 
+        let mut query = BiDirDijkstra::new(graph.nodes.len());
+        query.init(id1.id, id2.id);
         let now = Instant::now();
-        println!(
-            "{} -> {} = {:#?}",
-            id1.osm_id,
-            id2.osm_id,
-            ch_query::bfs(&graph, id1.dense_id, id2.dense_id)
-        );
+        let query_res = query.search(&graph);
+        println!("{} -> {} = {:#?}", id1.osm_id, id2.osm_id, query_res);
         let elapsed = now.elapsed();
         println!("Elapsed: {:.2?}", elapsed);
-
-        let now = Instant::now();
-        let query_res = ch_query::bi_dir_dijkstra(&graph, id1.dense_id, id2.dense_id);
-        println!("{} -> {} = {:#?}", id1.osm_id, id2.osm_id, query_res);
 
         for id in query_res.unwrap() {
-            println!("{}", graph.get_node(id).osm_id);
+            println!("{}", graph.nodes[id].osm_id);
         }
-
-        let elapsed = now.elapsed();
-        println!("Elapsed: {:.2?}", elapsed);
     }
 
     Ok(())

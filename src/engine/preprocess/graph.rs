@@ -1,8 +1,7 @@
 use humansize::{format_size, DECIMAL};
-use serde::{Deserialize, Serialize};
 
 /// A way node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Node {
     // Dense index of the node.
     pub dense_id: usize,
@@ -21,7 +20,7 @@ pub struct Node {
 }
 
 /// The metadata of an edge.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EdgeMetadata {
     // The weight of the edge.
     pub weight: f64,
@@ -36,7 +35,7 @@ pub struct EdgeMetadata {
 }
 
 /// An edge
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     // The dense id of the source node.
     pub src_id: usize,
@@ -50,9 +49,11 @@ pub struct Edge {
     pub prev_edge: Option<usize>,
     // Dense index of the next edge.
     pub next_edge: Option<usize>,
+    // Dense index of the node that the shortcut skips
+    pub via_node: Option<usize>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Graph {
     // A forward edge list, indexed by the dense id of a node.
     pub fwd_edge_list: Vec<Vec<usize>>,
@@ -73,6 +74,14 @@ impl Graph {
 
     pub fn num_edges(&self) -> usize {
         self.edges.len()
+    }
+
+    pub fn get_num_fwd(&self) -> usize {
+        self.fwd_edge_list.iter().fold(0, |acc, e| acc + e.len())
+    }
+
+    pub fn get_num_bwd(&self) -> usize {
+        self.bwd_edge_list.iter().fold(0, |acc, e| acc + e.len())
     }
 
     // Get the forward neighbours of a node by its dense id
@@ -141,6 +150,7 @@ impl Graph {
         metadata_index: usize,
         prev_edge: usize,
         next_edge: usize,
+        via_node: usize,
     ) {
         let edge_id_forward = self.edges.len();
         self.edges.push(Edge::new_shortcut(
@@ -149,6 +159,7 @@ impl Graph {
             metadata_index,
             prev_edge,
             next_edge,
+            via_node,
         ));
 
         self.fwd_edge_list[src_id].push(edge_id_forward);
@@ -267,6 +278,7 @@ impl Edge {
             is_shortcut: false,
             prev_edge: None,
             next_edge: None,
+            via_node: None,
         }
     }
 
@@ -276,6 +288,7 @@ impl Edge {
         metadata_index: usize,
         prev_edge: usize,
         next_edge: usize,
+        via_node: usize,
     ) -> Self {
         Self {
             src_id,
@@ -284,6 +297,7 @@ impl Edge {
             is_shortcut: true,
             prev_edge: Some(prev_edge),
             next_edge: Some(next_edge),
+            via_node: Some(via_node),
         }
     }
 
