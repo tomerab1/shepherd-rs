@@ -110,7 +110,7 @@ impl BiDirDijkstra {
         while !self.fwd_queue.is_empty() && !self.bwd_queue.is_empty() {
             if let Some((u, _)) = self.fwd_queue.pop() {
                 for edge in graph.fwd_neighbors(u) {
-                    let v = edge.dest;
+                    let v = edge.target;
                     let weight = edge.weight;
 
                     if graph.nodes[v].rank < graph.nodes[u].rank {
@@ -133,7 +133,7 @@ impl BiDirDijkstra {
 
             if let Some((u, _)) = self.bwd_queue.pop() {
                 for edge in graph.bwd_neighbors(u) {
-                    let v = edge.src;
+                    let v = edge.target;
                     let weight = edge.weight;
 
                     if graph.nodes[v].rank < graph.nodes[u].rank {

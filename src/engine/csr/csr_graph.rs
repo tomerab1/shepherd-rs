@@ -13,10 +13,8 @@ pub struct CSRNode {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CSREdgeHot {
-    pub src: usize,
-    pub dest: usize,
+    pub target: usize,
     pub weight: f32,
-    pub via_node: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,6 +22,7 @@ pub struct CSREdgeCold {
     pub name: Option<String>,
     pub prev_edge: Option<usize>,
     pub next_edge: Option<usize>,
+    pub via_node: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -49,22 +48,23 @@ impl CSRNode {
 }
 
 impl CSREdgeHot {
-    pub fn new(src: usize, dest: usize, weight: f32, via_node: Option<usize>) -> Self {
-        Self {
-            src,
-            dest,
-            weight,
-            via_node,
-        }
+    pub fn new(target: usize, weight: f32) -> Self {
+        Self { target, weight }
     }
 }
 
 impl CSREdgeCold {
-    pub fn new(name: Option<String>, prev_edge: Option<usize>, next_edge: Option<usize>) -> Self {
+    pub fn new(
+        name: Option<String>,
+        prev_edge: Option<usize>,
+        next_edge: Option<usize>,
+        via_node: Option<usize>,
+    ) -> Self {
         Self {
             name,
             prev_edge,
             next_edge,
+            via_node,
         }
     }
 }
@@ -83,17 +83,13 @@ impl CSRGraph {
                 let metadata = graph.get_edge_metadata(edge);
                 let new_index = values_hot.len();
 
-                values_hot.push(CSREdgeHot::new(
-                    edge.src_id,
-                    edge.dest_id,
-                    metadata.weight,
-                    edge.via_node,
-                ));
+                values_hot.push(CSREdgeHot::new(edge.dest_id, metadata.weight));
 
                 values_cold.push(CSREdgeCold::new(
                     metadata.name.clone(),
                     edge.prev_edge,
                     edge.next_edge,
+                    edge.via_node,
                 ));
 
                 fwd_cols.push(new_index);
@@ -112,17 +108,13 @@ impl CSRGraph {
                 let metadata = graph.get_edge_metadata(edge);
                 let new_index = values_hot.len();
 
-                values_hot.push(CSREdgeHot::new(
-                    edge.src_id,
-                    edge.dest_id,
-                    metadata.weight,
-                    edge.via_node,
-                ));
+                values_hot.push(CSREdgeHot::new(edge.src_id, metadata.weight));
 
                 values_cold.push(CSREdgeCold::new(
                     metadata.name.clone(),
                     edge.prev_edge,
                     edge.next_edge,
+                    edge.via_node,
                 ));
 
                 bwd_cols.push(new_index);
