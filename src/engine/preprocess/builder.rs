@@ -8,8 +8,8 @@ use crate::engine::utils;
 #[derive(Debug, Clone)]
 struct NodeParseData {
     dense_index: usize,
-    lat: f64,
-    lon: f64,
+    lat: f32,
+    lon: f32,
     is_traffic_signal: bool,
 }
 
@@ -54,7 +54,7 @@ fn parse_polyline_data(way_data: &WayParseData) -> Vec<i64> {
     way_data.refs.to_vec()
 }
 
-fn calc_weight(id1: i64, id2: i64, maps: &PBFParseResult) -> f64 {
+fn calc_weight(id1: i64, id2: i64, maps: &PBFParseResult) -> f32 {
     let node1 = maps.osm_id_to_node.get(&id1).unwrap();
     let node2 = maps.osm_id_to_node.get(&id2).unwrap();
     utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
@@ -180,8 +180,8 @@ fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
             let is_traffic_signal = node.tags().any(|e| e.1 == "traffic_signals");
             let node_data = NodeParseData {
                 dense_index: osm_id_to_node.len(),
-                lat: node.lat(),
-                lon: node.lon(),
+                lat: node.lat() as f32,
+                lon: node.lon() as f32,
                 is_traffic_signal,
             };
             osm_id_to_node.insert(node.id(), node_data);
@@ -190,8 +190,8 @@ fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
             let is_traffic_signal = node.tags().any(|e| e.1 == "traffic_signals");
             let node_data = NodeParseData {
                 dense_index: osm_id_to_node.len(),
-                lat: node.lat(),
-                lon: node.lon(),
+                lat: node.lat() as f32,
+                lon: node.lon() as f32,
                 is_traffic_signal,
             };
             osm_id_to_node.insert(node.id(), node_data);

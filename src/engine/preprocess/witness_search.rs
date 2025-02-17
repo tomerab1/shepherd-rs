@@ -1,4 +1,4 @@
-use core::f64;
+use core::f32;
 use std::cmp::Ordering;
 
 use priority_queue::PriorityQueue;
@@ -6,7 +6,7 @@ use priority_queue::PriorityQueue;
 use super::graph::Graph;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct HeapItem(f64);
+struct HeapItem(f32);
 
 impl Eq for HeapItem {}
 
@@ -25,7 +25,7 @@ impl PartialOrd for HeapItem {
 pub struct Dijkstra {
     src: usize,
     ignore: usize,
-    weights: Vec<f64>,
+    weights: Vec<f32>,
     queue: PriorityQueue<usize, HeapItem>,
 }
 
@@ -34,7 +34,7 @@ impl Dijkstra {
         Self {
             src: 0,
             ignore: 0,
-            weights: vec![f64::INFINITY; num_nodes],
+            weights: vec![f32::INFINITY; num_nodes],
             queue: PriorityQueue::new(),
         }
     }
@@ -49,7 +49,7 @@ impl Dijkstra {
     }
 
     fn reset(&mut self) {
-        self.weights.fill(f64::INFINITY);
+        self.weights.fill(f32::INFINITY);
         self.queue.clear();
     }
 
@@ -57,9 +57,9 @@ impl Dijkstra {
         &mut self,
         graph: &Graph,
         dest: usize,
-        limit_weight: f64,
+        limit_weight: f32,
         max_hops: usize,
-    ) -> f64 {
+    ) -> f32 {
         let mut num_hops = 0;
         while let Some((curr_id, _)) = self.queue.pop() {
             if num_hops == max_hops {
@@ -79,11 +79,11 @@ impl Dijkstra {
                 }
 
                 let weight = self.weights[curr_id] + graph.get_edge_metadata(neighbor_edge).weight;
-                if weight == f64::INFINITY {
+                if weight == f32::INFINITY {
                     continue;
                 }
                 let adj_weight = self.weights[neighbor_id];
-                if weight < adj_weight || adj_weight == f64::INFINITY {
+                if weight < adj_weight || adj_weight == f32::INFINITY {
                     self.weights[neighbor_id] = weight;
                     self.queue.push(neighbor_id, HeapItem(weight));
                 }

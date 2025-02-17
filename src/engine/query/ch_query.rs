@@ -5,7 +5,7 @@ use priority_queue::PriorityQueue;
 use crate::engine::csr::csr_graph::CSRGraph;
 
 #[derive(Copy, Clone, Debug)]
-struct HeapItem(f64);
+struct HeapItem(f32);
 
 impl PartialEq for HeapItem {
     fn eq(&self, other: &Self) -> bool {
@@ -30,9 +30,9 @@ impl Ord for HeapItem {
 pub struct BiDirDijkstra {
     src: usize,
     dest: usize,
-    fwd_weights: Vec<f64>,
+    fwd_weights: Vec<f32>,
     fwd_prev: Vec<Option<usize>>,
-    bwd_weights: Vec<f64>,
+    bwd_weights: Vec<f32>,
     bwd_prev: Vec<Option<usize>>,
     fwd_queue: PriorityQueue<usize, HeapItem>,
     bwd_queue: PriorityQueue<usize, HeapItem>,
@@ -40,8 +40,8 @@ pub struct BiDirDijkstra {
 
 impl BiDirDijkstra {
     pub fn new(num_nodes: usize) -> Self {
-        let fwd_weights = vec![f64::INFINITY; num_nodes];
-        let bwd_weights = vec![f64::INFINITY; num_nodes];
+        let fwd_weights = vec![f32::INFINITY; num_nodes];
+        let bwd_weights = vec![f32::INFINITY; num_nodes];
         let fwd_prev = vec![None; num_nodes];
         let bwd_prev = vec![None; num_nodes];
 
@@ -74,8 +74,8 @@ impl BiDirDijkstra {
     }
 
     fn reset(&mut self) {
-        self.fwd_weights.fill(f64::INFINITY);
-        self.bwd_weights.fill(f64::INFINITY);
+        self.fwd_weights.fill(f32::INFINITY);
+        self.bwd_weights.fill(f32::INFINITY);
         self.fwd_prev.fill(None);
         self.bwd_prev.fill(None);
         self.fwd_queue.clear();
@@ -124,7 +124,7 @@ impl BiDirDijkstra {
                         self.fwd_queue.push(v, HeapItem(alt));
                     }
 
-                    if self.bwd_weights[v] != f64::INFINITY {
+                    if self.bwd_weights[v] != f32::INFINITY {
                         meeting_node = Some(v);
                         break;
                     }
@@ -147,7 +147,7 @@ impl BiDirDijkstra {
                         self.bwd_queue.push(v, HeapItem(alt));
                     }
 
-                    if self.fwd_weights[v] != f64::INFINITY {
+                    if self.fwd_weights[v] != f32::INFINITY {
                         meeting_node = Some(v);
                         break;
                     }

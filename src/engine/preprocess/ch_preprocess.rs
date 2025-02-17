@@ -1,4 +1,4 @@
-use core::f64;
+use core::f32;
 use std::{
     cmp::Reverse,
     sync::{Arc, Mutex},
@@ -125,7 +125,7 @@ fn add_shortcut(
     graph: &mut Graph,
     w: usize,
     v: usize,
-    combined_weight: f64,
+    combined_weight: f32,
     left_edge_index: usize,
     right_edge_index: usize,
     via_node: usize,

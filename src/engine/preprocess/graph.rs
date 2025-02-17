@@ -12,9 +12,9 @@ pub struct Node {
     // Flag for identifying if the node was contracted or not
     pub is_contracted: bool,
     // lat
-    pub lat: f64,
+    pub lat: f32,
     // lon
-    pub lon: f64,
+    pub lon: f32,
     // Is traffic light.
     pub is_traffic_light: bool,
 }
@@ -23,7 +23,7 @@ pub struct Node {
 #[derive(Debug, Clone)]
 pub struct EdgeMetadata {
     // The weight of the edge.
-    pub weight: f64,
+    pub weight: f32,
     // Optional name of the edge (what road/street its part of).
     pub name: Option<String>,
     // Optional maximum speed.
@@ -251,12 +251,12 @@ impl Node {
         self.is_contracted
     }
 
-    pub fn set_lat_lon(&mut self, lat: f64, lon: f64) {
+    pub fn set_lat_lon(&mut self, lat: f32, lon: f32) {
         self.lat = lat;
         self.lon = lon;
     }
 
-    pub fn get_lat_lon(&self) -> (f64, f64) {
+    pub fn get_lat_lon(&self) -> (f32, f32) {
         (self.lat, self.lon)
     }
 

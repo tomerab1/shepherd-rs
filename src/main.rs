@@ -5,11 +5,9 @@ use std::{
 };
 
 use routing_engine::engine::{
-    csr::csr_graph::{self, CSRGraph},
-    preprocess::{
-        builder::from_osmpbf, ch_preprocess::contract_graph, graph::Graph, witness_search::Dijkstra,
-    },
-    query::ch_query::{self, BiDirDijkstra},
+    csr::csr_graph::CSRGraph,
+    preprocess::{builder::from_osmpbf, ch_preprocess::contract_graph, witness_search::Dijkstra},
+    query::ch_query::BiDirDijkstra,
 };
 
 fn main() -> anyhow::Result<()> {
