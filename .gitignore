@@ -9,3 +9,4 @@ tests/data/nz-car-only.osm
 tests/data/ns.osm
 .gitignore
 tests/data/ns.osm.pbf
+data/nodes.csv
