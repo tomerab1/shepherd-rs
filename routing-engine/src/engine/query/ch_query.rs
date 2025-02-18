@@ -31,11 +31,17 @@ pub struct BiDirDijkstra {
     src: usize,
     dest: usize,
     fwd_weights: Vec<f32>,
-    fwd_prev: Vec<Option<usize>>,
+    fwd_prev: Vec<Option<(usize, usize)>>,
     bwd_weights: Vec<f32>,
-    bwd_prev: Vec<Option<usize>>,
+    bwd_prev: Vec<Option<(usize, usize)>>,
     fwd_queue: PriorityQueue<usize, HeapItem>,
     bwd_queue: PriorityQueue<usize, HeapItem>,
+}
+
+#[derive(Debug)]
+pub struct QueryResult {
+    pub edge_id: usize,
+    pub is_fwd: bool,
 }
 
 impl BiDirDijkstra {
@@ -82,21 +88,28 @@ impl BiDirDijkstra {
         self.bwd_queue.clear();
     }
 
-    fn get_path_ids(&mut self, meeting_node: Option<usize>) -> Option<Vec<usize>> {
+    fn get_path_ids(&mut self, meeting_node: Option<usize>) -> Option<Vec<QueryResult>> {
         meeting_node.map(|node| {
+            println!("MEETING NODE {}", node);
             let mut path = Vec::new();
             let mut current = node;
 
-            while let Some(prev) = self.fwd_prev[current] {
-                path.push(prev);
+            while let Some((id, prev)) = self.fwd_prev[current] {
+                path.push(QueryResult {
+                    edge_id: id,
+                    is_fwd: true,
+                });
                 current = prev;
             }
 
             path.reverse();
             current = node;
 
-            while let Some(prev) = self.bwd_prev[current] {
-                path.push(prev);
+            while let Some((id, prev)) = self.bwd_prev[current] {
+                path.push(QueryResult {
+                    edge_id: id,
+                    is_fwd: false,
+                });
                 current = prev;
             }
 
@@ -104,12 +117,12 @@ impl BiDirDijkstra {
         })
     }
 
-    pub fn search(&mut self, graph: &CSRGraph) -> Option<Vec<usize>> {
+    pub fn search(&mut self, graph: &CSRGraph) -> Option<Vec<QueryResult>> {
         let mut meeting_node = None;
 
         while !self.fwd_queue.is_empty() && !self.bwd_queue.is_empty() {
             if let Some((u, _)) = self.fwd_queue.pop() {
-                for edge in graph.fwd_neighbors(u) {
+                for (id, edge) in graph.fwd_neighbors(u) {
                     let v = edge.target;
                     let weight = edge.weight;
 
@@ -120,7 +133,7 @@ impl BiDirDijkstra {
                     let alt = self.fwd_weights[u] + weight;
                     if alt < self.fwd_weights[v] {
                         self.fwd_weights[v] = alt;
-                        self.fwd_prev[v] = Some(u);
+                        self.fwd_prev[v] = Some((id, u));
                         self.fwd_queue.push(v, HeapItem(alt));
                     }
 
@@ -132,7 +145,7 @@ impl BiDirDijkstra {
             }
 
             if let Some((u, _)) = self.bwd_queue.pop() {
-                for edge in graph.bwd_neighbors(u) {
+                for (id, edge) in graph.bwd_neighbors(u) {
                     let v = edge.target;
                     let weight = edge.weight;
 
@@ -143,7 +156,7 @@ impl BiDirDijkstra {
                     let alt = self.bwd_weights[u] + weight;
                     if alt < self.bwd_weights[v] {
                         self.bwd_weights[v] = alt;
-                        self.bwd_prev[v] = Some(u);
+                        self.bwd_prev[v] = Some((id, u));
                         self.bwd_queue.push(v, HeapItem(alt));
                     }
 

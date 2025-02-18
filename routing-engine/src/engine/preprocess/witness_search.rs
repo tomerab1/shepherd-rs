@@ -61,9 +61,13 @@ impl Dijkstra {
         max_hops: usize,
     ) -> f32 {
         let mut num_hops = 0;
-        while let Some((curr_id, _)) = self.queue.pop() {
+        while let Some((curr_id, HeapItem(weight))) = self.queue.pop() {
             if num_hops == max_hops {
                 break;
+            }
+
+            if weight > limit_weight {
+                return self.weights[dest];
             }
 
             if self.weights[dest] <= limit_weight {

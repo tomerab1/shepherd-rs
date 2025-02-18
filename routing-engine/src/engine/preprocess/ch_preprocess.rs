@@ -1,31 +1,26 @@
 use core::f32;
-use std::{
-    cmp::Reverse,
-    sync::{Arc, Mutex},
-};
+use std::cmp::Reverse;
 
 use super::graph::EdgeMetadata;
 use super::{graph::Graph, witness_search::Dijkstra};
 
 use priority_queue::PriorityQueue;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
-    let queue = Arc::new(Mutex::new(PriorityQueue::new()));
+    // let queue = Arc::new(Mutex::new(PriorityQueue::new()));
+    let mut queue = PriorityQueue::new();
     let mut ranks = vec![0usize; graph.num_nodes()];
     let mut order = vec![0usize; graph.num_nodes()];
 
     let node_ids: Vec<_> = graph.nodes.par_iter().map(|node| node.dense_id).collect();
     let num_nodes = node_ids.len();
-    node_ids.into_par_iter().for_each(|id| {
+    for id in node_ids {
         let mut dijkstra = Dijkstra::new(num_nodes);
-        queue
-            .lock()
-            .unwrap()
-            .push(id, Reverse(rank_node(overlay, &mut dijkstra, id)));
-    });
+        queue.push(id, Reverse(rank_node(overlay, &mut dijkstra, id)));
+    }
 
-    let mut queue = queue.lock().unwrap();
+    // let mut queue = queue.lock().unwrap();
     let mut contraction_count = 0usize;
     while let Some((contracted_id, _)) = queue.pop() {
         println!("{} {}", overlay.get_mem_usage_str(), queue.len());
@@ -95,7 +90,7 @@ fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra
             let weight_u_w = overlay.get_edge_metadata(fwd_edge).weight;
             let combined_weight = weight_v_u + weight_u_w;
 
-            let witness_weight = dijkstra.search(graph, v, combined_weight, graph.num_edges() / 2);
+            let witness_weight = dijkstra.search(graph, v, combined_weight, usize::MAX);
 
             if witness_weight > combined_weight {
                 add_shortcut(
@@ -173,8 +168,7 @@ fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
             let weight_u_w = graph.get_edge_metadata(bwd_edge).weight;
             let combined_weight = weight_u_w + weight_v_u;
 
-            let witness_weight =
-                dijkstra.search(graph, fwd_dest_id, combined_weight, graph.num_nodes() / 2);
+            let witness_weight = dijkstra.search(graph, fwd_dest_id, combined_weight, usize::MAX);
             if witness_weight > combined_weight {
                 num_contracted += 1;
             }

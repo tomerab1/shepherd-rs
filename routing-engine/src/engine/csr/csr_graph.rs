@@ -20,8 +20,8 @@ pub struct CSREdgeHot {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CSREdgeCold {
     pub name: Option<String>,
-    pub prev_edge: Option<usize>,
-    pub next_edge: Option<usize>,
+    pub from_node: usize,
+    pub to_node: usize,
     pub via_node: Option<usize>,
 }
 
@@ -56,14 +56,14 @@ impl CSREdgeHot {
 impl CSREdgeCold {
     pub fn new(
         name: Option<String>,
-        prev_edge: Option<usize>,
-        next_edge: Option<usize>,
+        from_node: usize,
+        to_node: usize,
         via_node: Option<usize>,
     ) -> Self {
         Self {
             name,
-            prev_edge,
-            next_edge,
+            from_node,
+            to_node,
             via_node,
         }
     }
@@ -87,8 +87,8 @@ impl CSRGraph {
 
                 values_cold.push(CSREdgeCold::new(
                     metadata.name.clone(),
-                    edge.prev_edge,
-                    edge.next_edge,
+                    edge.src_id,
+                    edge.dest_id,
                     edge.via_node,
                 ));
 
@@ -112,8 +112,8 @@ impl CSRGraph {
 
                 values_cold.push(CSREdgeCold::new(
                     metadata.name.clone(),
-                    edge.prev_edge,
-                    edge.next_edge,
+                    edge.src_id,
+                    edge.dest_id,
                     edge.via_node,
                 ));
 
@@ -140,19 +140,35 @@ impl CSRGraph {
         }
     }
 
-    pub fn fwd_neighbors(&self, node: usize) -> impl Iterator<Item = &CSREdgeHot> {
+    pub fn fwd_neighbors_cold(&self, node: usize) -> impl Iterator<Item = (usize, &CSREdgeCold)> {
         let start = self.row_fwd_ptr[node];
         let end = self.row_fwd_ptr[node + 1];
         self.cols_fwd[start..end]
             .iter()
-            .map(move |&edge_idx| &self.values_hot[edge_idx])
+            .map(|&edge_idx| (edge_idx, &self.values_cold[edge_idx]))
     }
 
-    pub fn bwd_neighbors(&self, node: usize) -> impl Iterator<Item = &CSREdgeHot> {
+    pub fn bwd_neighbors_cold(&self, node: usize) -> impl Iterator<Item = (usize, &CSREdgeCold)> {
         let start = self.row_bwd_ptr[node];
         let end = self.row_bwd_ptr[node + 1];
         self.cols_bwd[start..end]
             .iter()
-            .map(move |&edge_idx| &self.values_hot[edge_idx])
+            .map(|&edge_idx| (edge_idx, &self.values_cold[edge_idx]))
+    }
+
+    pub fn fwd_neighbors(&self, node: usize) -> impl Iterator<Item = (usize, &CSREdgeHot)> {
+        let start = self.row_fwd_ptr[node];
+        let end = self.row_fwd_ptr[node + 1];
+        self.cols_fwd[start..end]
+            .iter()
+            .map(|&edge_idx| (edge_idx, &self.values_hot[edge_idx]))
+    }
+
+    pub fn bwd_neighbors(&self, node: usize) -> impl Iterator<Item = (usize, &CSREdgeHot)> {
+        let start = self.row_bwd_ptr[node];
+        let end = self.row_bwd_ptr[node + 1];
+        self.cols_bwd[start..end]
+            .iter()
+            .map(|&edge_idx| (edge_idx, &self.values_hot[edge_idx]))
     }
 }

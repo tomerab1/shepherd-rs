@@ -9,6 +9,7 @@ use routing_engine::engine::{
     export::{csv_export::CSVExport, export_provider::ExportProvider},
     preprocess::{builder::from_osmpbf, ch_preprocess::contract_graph, witness_search::Dijkstra},
     query::ch_query::BiDirDijkstra,
+    visitor::{shortcut_visitor::ShortcutVisitor, visitable::Visitable},
 };
 
 fn export_node<T: ExportProvider>(exporter: T) -> T::ExportType {
@@ -19,8 +20,9 @@ fn main() -> anyhow::Result<()> {
     // let argv: Vec<String> = std::env::args().collect();
 
     if !fs::exists("./data/graph.bin")? {
-        let graph =
-            from_osmpbf("/home/tomerab/VSCProjects/routing-engine/tests/data/nz-car-only.osm.pbf")?;
+        let graph = from_osmpbf(
+            "/home/tomerab/VSCProjects/routing-app/routing-engine/tests/data/nz-car-only.osm.pbf",
+        )?;
         println!("CREATED GRAPH");
 
         println!("{} {}", graph.num_edges(), graph.num_nodes());
@@ -53,8 +55,8 @@ fn main() -> anyhow::Result<()> {
         file.read_exact(&mut buf)?;
         let graph: CSRGraph = bincode::deserialize(&buf)?;
 
-        let id1 = graph.nodes.iter().find(|n| n.osm_id == 3009143267).unwrap();
-        let id2 = graph.nodes.iter().find(|n| n.osm_id == 2232385899).unwrap();
+        let id1 = graph.nodes.iter().find(|n| n.osm_id == 2232375743).unwrap();
+        let id2 = graph.nodes.iter().find(|n| n.osm_id == 706751647).unwrap();
 
         let mut query = BiDirDijkstra::new(graph.nodes.len());
         query.init(id1.id, id2.id);
@@ -64,8 +66,13 @@ fn main() -> anyhow::Result<()> {
         let elapsed = now.elapsed();
         println!("Elapsed: {:.2?}", elapsed);
 
-        for id in query_res.unwrap() {
-            println!("{}", graph.nodes[id].osm_id);
+        if let Some(query_res) = query_res {
+            let visitor = ShortcutVisitor::new(&graph, &query_res);
+            for id in visitor.visit() {
+                println!("{}", graph.nodes[id].osm_id);
+            }
+        } else {
+            println!("Could not find path");
         }
     }
 
