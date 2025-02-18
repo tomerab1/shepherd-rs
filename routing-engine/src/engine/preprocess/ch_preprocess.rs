@@ -8,7 +8,6 @@ use priority_queue::PriorityQueue;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
-    // let queue = Arc::new(Mutex::new(PriorityQueue::new()));
     let mut queue = PriorityQueue::new();
     let mut ranks = vec![0usize; graph.num_nodes()];
     let mut order = vec![0usize; graph.num_nodes()];
@@ -20,7 +19,6 @@ pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijk
         queue.push(id, Reverse(rank_node(overlay, &mut dijkstra, id)));
     }
 
-    // let mut queue = queue.lock().unwrap();
     let mut contraction_count = 0usize;
     while let Some((contracted_id, _)) = queue.pop() {
         println!("{} {}", overlay.get_mem_usage_str(), queue.len());
