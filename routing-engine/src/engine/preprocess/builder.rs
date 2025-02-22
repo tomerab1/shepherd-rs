@@ -93,7 +93,7 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
             fwd_edge_list[*curr_node].push(edge_index_fwd);
             bwd_edge_list[*next_node].push(edge_index_fwd);
 
-            if !way_data.is_oneway && curr_id != next_id {
+            if !(way_data.is_oneway || way_data.is_roundabout) && curr_id != next_id {
                 let edge_index_bwd = edges.len();
                 edges.push(Edge::new(*next_node, *curr_node, metadata_index));
                 fwd_edge_list[*next_node].push(edge_index_bwd);
@@ -111,10 +111,11 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
 }
 
 fn build_nodes(nodes_map: &BTreeMap<i64, NodeParseData>) -> Vec<Node> {
-    let mut nodes: Vec<Node> = nodes_map
+    nodes_map
         .iter()
-        .map(|(&osm_id, data)| Node {
-            dense_id: 0,
+        .enumerate()
+        .map(|(i, (&osm_id, data))| Node {
+            dense_id: i,
             osm_id,
             rank: 0,
             is_contracted: false,
@@ -122,30 +123,7 @@ fn build_nodes(nodes_map: &BTreeMap<i64, NodeParseData>) -> Vec<Node> {
             lon: data.lon,
             is_traffic_light: data.is_traffic_signal,
         })
-        .collect();
-
-    sort_by_lat_lon(&mut nodes);
-
-    // assign the dense index
-    for (dense_id, node) in nodes.iter_mut().enumerate() {
-        node.dense_id = dense_id;
-    }
-
-    nodes
-}
-
-fn sort_by_lat_lon(nodes: &mut [Node]) {
-    // Sort the nodes by lat/lon, may result in better cache locality (?)
-    nodes.sort_by(|a, b| {
-        a.lat
-            .partial_cmp(&b.lat)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(
-                a.lon
-                    .partial_cmp(&b.lon)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-    });
+        .collect()
 }
 
 fn parse_way_name(way: &Way) -> Option<String> {
@@ -293,40 +271,6 @@ mod tests {
         assert_eq!(nodes[1].lat, 30.0);
         assert_eq!(nodes[1].lon, 40.0);
         assert!(nodes[1].is_traffic_light);
-    }
-
-    #[test]
-    fn test_sort_by_lat_lon() {
-        let mut nodes_map: BTreeMap<i64, NodeParseData> = BTreeMap::new();
-        let nodes_data = [
-            (10.0, 20.0, false),
-            (40.0, 50.0, false),
-            (30.0, 40.0, false),
-            (20.0, 30.0, false),
-        ];
-
-        let expected_node_data = [(10.0, 20.0), (20.0, 30.0), (30.0, 40.0), (40.0, 50.0)];
-
-        for (i, (lat, lon, is_traffic_signal)) in nodes_data.into_iter().enumerate() {
-            nodes_map.insert(
-                i as i64,
-                NodeParseData {
-                    dense_index: i,
-                    lat,
-                    lon,
-                    is_traffic_signal,
-                },
-            );
-        }
-
-        let mut nodes = build_nodes(&nodes_map);
-
-        sort_by_lat_lon(&mut nodes);
-
-        for (i, n) in nodes.iter().enumerate() {
-            assert_eq!(n.lat, expected_node_data[i].0);
-            assert_eq!(n.lon, expected_node_data[i].1);
-        }
     }
 
     #[test]

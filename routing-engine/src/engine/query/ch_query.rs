@@ -90,7 +90,6 @@ impl BiDirDijkstra {
 
     fn get_path_ids(&mut self, meeting_node: Option<usize>) -> Option<Vec<QueryResult>> {
         meeting_node.map(|node| {
-            println!("MEETING NODE {}", node);
             let mut path = Vec::new();
             let mut current = node;
 
@@ -122,7 +121,7 @@ impl BiDirDijkstra {
 
         while !self.fwd_queue.is_empty() && !self.bwd_queue.is_empty() {
             if let Some((u, _)) = self.fwd_queue.pop() {
-                for (id, edge) in graph.fwd_neighbors(u) {
+                for edge in graph.fwd_neighbors(u) {
                     let v = edge.target;
                     let weight = edge.weight;
 
@@ -133,7 +132,7 @@ impl BiDirDijkstra {
                     let alt = self.fwd_weights[u] + weight;
                     if alt < self.fwd_weights[v] {
                         self.fwd_weights[v] = alt;
-                        self.fwd_prev[v] = Some((id, u));
+                        self.fwd_prev[v] = Some((edge.id, u));
                         self.fwd_queue.push(v, HeapItem(alt));
                     }
 
@@ -145,7 +144,7 @@ impl BiDirDijkstra {
             }
 
             if let Some((u, _)) = self.bwd_queue.pop() {
-                for (id, edge) in graph.bwd_neighbors(u) {
+                for edge in graph.bwd_neighbors(u) {
                     let v = edge.target;
                     let weight = edge.weight;
 
@@ -156,7 +155,7 @@ impl BiDirDijkstra {
                     let alt = self.bwd_weights[u] + weight;
                     if alt < self.bwd_weights[v] {
                         self.bwd_weights[v] = alt;
-                        self.bwd_prev[v] = Some((id, u));
+                        self.bwd_prev[v] = Some((edge.id, u));
                         self.bwd_queue.push(v, HeapItem(alt));
                     }
 

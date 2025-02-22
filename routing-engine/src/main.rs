@@ -34,6 +34,25 @@ fn main() -> anyhow::Result<()> {
 
         println!("STARTING CONTRACTION");
         contract_graph(graph, &mut overlay, &mut dijkstra);
+
+        for node in &overlay.nodes {
+            println!("{:?}", node);
+            for edge in overlay.get_fwd_neighbors(node.dense_id) {
+                println!(
+                    "{edge}\t{:?}\t{}",
+                    overlay.get_edge(*edge),
+                    overlay.get_node(overlay.get_edge(*edge).dest_id).rank
+                );
+            }
+            for edge in overlay.get_bwd_neighbors(node.dense_id) {
+                println!(
+                    "{edge}\t{:?}\t{}",
+                    overlay.get_edge(*edge),
+                    overlay.get_node(overlay.get_edge(*edge).dest_id).rank
+                );
+            }
+        }
+
         println!("FINISHED CONTRACTION");
 
         println!("Exporting nodes to csv");
@@ -55,7 +74,7 @@ fn main() -> anyhow::Result<()> {
         file.read_exact(&mut buf)?;
         let graph: CSRGraph = bincode::deserialize(&buf)?;
 
-        let id1 = graph.nodes.iter().find(|n| n.osm_id == 2232375743).unwrap();
+        let id1 = graph.nodes.iter().find(|n| n.osm_id == 2032864140).unwrap();
         let id2 = graph.nodes.iter().find(|n| n.osm_id == 706751647).unwrap();
 
         let mut query = BiDirDijkstra::new(graph.nodes.len());

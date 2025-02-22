@@ -5,47 +5,43 @@ use super::graph::EdgeMetadata;
 use super::{graph::Graph, witness_search::Dijkstra};
 
 use priority_queue::PriorityQueue;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
     let mut queue = PriorityQueue::new();
-    let mut ranks = vec![0usize; graph.num_nodes()];
-    let mut order = vec![0usize; graph.num_nodes()];
 
-    let node_ids: Vec<_> = graph.nodes.par_iter().map(|node| node.dense_id).collect();
-    let num_nodes = node_ids.len();
-    for id in node_ids {
-        let mut dijkstra = Dijkstra::new(num_nodes);
-        queue.push(id, Reverse(rank_node(overlay, &mut dijkstra, id)));
+    for (i, node) in graph.nodes.iter().enumerate() {
+        if i != 0 && i % 10_000 == 0 {
+            println!("Ranked {i} nodes");
+        }
+        queue.push(
+            node.dense_id,
+            Reverse(rank_node(overlay, dijkstra, node.dense_id)),
+        );
     }
 
-    let mut contraction_count = 0usize;
     while let Some((contracted_id, _)) = queue.pop() {
         println!("{} {}", overlay.get_mem_usage_str(), queue.len());
-        ranks[contracted_id] = contraction_count;
-        order[contraction_count] = contracted_id;
 
         let neighbor_rank = overlay.get_node(contracted_id).get_rank() + 1;
         contract_node(&mut graph, overlay, dijkstra, contracted_id);
 
-        let fwd_neighbors: Vec<_> = overlay.get_fwd_neighbors(contracted_id).to_vec();
-        let bwd_neighbors: Vec<_> = overlay.get_bwd_neighbors(contracted_id).to_vec();
+        let fwd_neighbors = overlay.get_fwd_neighbors(contracted_id).to_vec();
+        let bwd_neighbors = overlay.get_bwd_neighbors(contracted_id).to_vec();
 
-        for edge_id in fwd_neighbors.iter().chain(bwd_neighbors.iter()) {
-            let edge = overlay.get_edge(*edge_id);
+        for neighbor_id in bwd_neighbors.iter().chain(fwd_neighbors.iter()) {
+            let edge = overlay.get_edge(*neighbor_id);
             let neighbor_id = if edge.src_id == contracted_id {
                 edge.dest_id
             } else {
                 edge.src_id
             };
+
+            let rank = rank_node(overlay, dijkstra, neighbor_id);
             overlay.get_node_mut(neighbor_id).raise_rank(neighbor_rank);
-            let new_rank = rank_node(overlay, dijkstra, neighbor_id);
-            queue.change_priority(&neighbor_id, Reverse(new_rank));
+            queue.change_priority(&neighbor_id, Reverse(rank));
         }
 
         remove_edges_from_neighbors(&mut graph, contracted_id);
-
-        contraction_count += 1;
     }
 }
 
@@ -88,7 +84,7 @@ fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra
             let weight_u_w = overlay.get_edge_metadata(fwd_edge).weight;
             let combined_weight = weight_v_u + weight_u_w;
 
-            let witness_weight = dijkstra.search(graph, v, combined_weight, usize::MAX);
+            let witness_weight = dijkstra.search(graph, v, combined_weight, 500);
 
             if witness_weight > combined_weight {
                 add_shortcut(
@@ -143,19 +139,19 @@ fn add_shortcut(
     );
 }
 
-fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
-    let in_deg = graph.bwd_edge_list[node_index].len() as i32;
-    let out_deg = graph.fwd_edge_list[node_index].len() as i32;
+fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_id: usize) -> i32 {
+    let in_deg = graph.bwd_edge_list[node_id].len() as i32;
+    let out_deg = graph.fwd_edge_list[node_id].len() as i32;
     let node_degree = in_deg + out_deg;
-    let mut num_contracted = 0i32;
+    let mut contracted_count = 0;
 
-    for bwd_edge_index in graph.get_bwd_neighbors(node_index) {
-        let bwd_edge = graph.get_edge(*bwd_edge_index);
+    for bwd_id in graph.get_bwd_neighbors(node_id) {
+        let bwd_edge = graph.get_edge(*bwd_id);
         let bwd_src_id = bwd_edge.src_id;
 
-        dijkstra.init(bwd_src_id, node_index);
-        for fwd_edge_index in graph.get_fwd_neighbors(node_index) {
-            let fwd_edge = graph.get_edge(*fwd_edge_index);
+        dijkstra.init(bwd_src_id, node_id);
+        for fwd_id in graph.get_fwd_neighbors(node_id) {
+            let fwd_edge = graph.get_edge(*fwd_id);
             let fwd_dest_id = fwd_edge.dest_id;
 
             if fwd_dest_id == bwd_src_id {
@@ -166,14 +162,14 @@ fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_index: usize) -> i32 {
             let weight_u_w = graph.get_edge_metadata(bwd_edge).weight;
             let combined_weight = weight_u_w + weight_v_u;
 
-            let witness_weight = dijkstra.search(graph, fwd_dest_id, combined_weight, usize::MAX);
+            let witness_weight = dijkstra.search(graph, fwd_dest_id, combined_weight, 500);
             if witness_weight > combined_weight {
-                num_contracted += 1;
+                contracted_count += 1;
             }
         }
     }
 
-    num_contracted - node_degree
+    contracted_count - node_degree
 }
 
 #[cfg(test)]
@@ -390,7 +386,7 @@ mod tests {
         let mut dijkstra = Dijkstra::new(overlay.num_nodes());
 
         for node in &overlay.nodes {
-            println!("{}", rank_node(&graph, &mut dijkstra, node.dense_id));
+            println!("{}", rank_node(&graph, node.dense_id));
         }
 
         contract_graph(graph, &mut overlay, &mut dijkstra);

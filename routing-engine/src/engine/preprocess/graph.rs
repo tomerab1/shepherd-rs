@@ -163,10 +163,7 @@ impl Graph {
         ));
 
         self.fwd_edge_list[src_id].push(edge_id_forward);
-
-        if src_id != dest_id {
-            self.bwd_edge_list[dest_id].push(edge_id_forward);
-        }
+        self.bwd_edge_list[dest_id].push(edge_id_forward);
     }
 
     fn get_nodes_bytes(&self) -> usize {
