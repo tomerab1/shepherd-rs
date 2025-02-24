@@ -1,6 +1,7 @@
 use itertools::Itertools;
+use multimap::MultiMap;
 use osmpbf::{Element, ElementReader, Way};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::graph::{Edge, EdgeMetadata, Graph, Node};
 use crate::engine::utils;
@@ -15,6 +16,7 @@ struct NodeParseData {
 
 #[derive(Debug, Clone)]
 struct WayParseData {
+    id: i64,
     name: Option<String>,
     max_speed: Option<u8>,
     is_roundabout: bool,
@@ -37,9 +39,10 @@ struct BuildEdgeListResult {
 
 pub fn from_osmpbf(path: &str) -> anyhow::Result<Graph> {
     let parse_result = parse_osmpbf(path)?;
+    let intersections_map = create_intersections_map(path)?;
 
     let nodes = build_nodes(&parse_result.osm_id_to_node);
-    let build_edge_lists_result = build_edge_lists(parse_result, &nodes);
+    let build_edge_lists_result = build_edge_lists(parse_result, &nodes, intersections_map);
 
     Ok(Graph {
         fwd_edge_list: build_edge_lists_result.fwd_edge_list,
@@ -54,13 +57,30 @@ fn parse_polyline_data(way_data: &WayParseData) -> Vec<i64> {
     way_data.refs.to_vec()
 }
 
-fn calc_weight(id1: i64, id2: i64, maps: &PBFParseResult) -> f32 {
-    let node1 = maps.osm_id_to_node.get(&id1).unwrap();
-    let node2 = maps.osm_id_to_node.get(&id2).unwrap();
-    utils::haversine_distance(node1.lat, node1.lon, node2.lat, node2.lon)
+fn calc_weight_with_turn(prev_id: i64, curr_id: i64, next_id: i64, maps: &PBFParseResult) -> f32 {
+    let prev = maps.osm_id_to_node.get(&prev_id).unwrap();
+    let curr = maps.osm_id_to_node.get(&curr_id).unwrap();
+    let next: &NodeParseData = maps.osm_id_to_node.get(&next_id).unwrap();
+
+    let dist = utils::haversine_distance(curr.lat, curr.lon, next.lat, next.lon);
+    let turn_cost =
+        utils::calc_turn_cost(prev.lat, prev.lon, curr.lat, curr.lon, next.lat, next.lon);
+
+    turn_cost * dist
 }
 
-fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult {
+fn calc_weight_without_turn(curr_id: i64, next_id: i64, maps: &PBFParseResult) -> f32 {
+    let curr = maps.osm_id_to_node.get(&curr_id).unwrap();
+    let next: &NodeParseData = maps.osm_id_to_node.get(&next_id).unwrap();
+
+    utils::haversine_distance(curr.lat, curr.lon, next.lat, next.lon)
+}
+
+fn build_edge_lists(
+    maps: PBFParseResult,
+    nodes: &[Node],
+    intersections_map: MultiMap<i64, i64>,
+) -> BuildEdgeListResult {
     let osm_to_dense: BTreeMap<i64, usize> = nodes.iter().map(|n| (n.osm_id, n.dense_id)).collect();
     let mut fwd_edge_list: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     let mut bwd_edge_list: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
@@ -72,32 +92,103 @@ fn build_edge_lists(maps: PBFParseResult, nodes: &[Node]) -> BuildEdgeListResult
             continue;
         }
 
-        let polyline_data = parse_polyline_data(way_data);
-        for (curr_id, next_id) in polyline_data.iter().tuple_windows() {
-            let weight = calc_weight(*curr_id, *next_id, &maps);
-            let curr_node = osm_to_dense.get(curr_id).unwrap();
-            let next_node = osm_to_dense.get(next_id).unwrap();
+        if way_data.is_roundabout {
+            let polyline_data = parse_polyline_data(way_data);
+            for (curr_id, next_id) in polyline_data.iter().tuple_windows() {
+                let weight = calc_weight_without_turn(*curr_id, *next_id, &maps);
+                let curr_node = osm_to_dense.get(curr_id).unwrap();
+                let next_node = osm_to_dense.get(next_id).unwrap();
 
-            let metadata_index = edge_metadata.len();
-            let metadata = EdgeMetadata {
-                weight,
-                is_one_way: way_data.is_oneway,
-                is_roundabout: way_data.is_roundabout,
-                name: way_data.name.clone(),
-                speed_limit: way_data.max_speed,
-            };
-            edge_metadata.push(metadata);
+                let metadata_index = edge_metadata.len();
+                let metadata = EdgeMetadata {
+                    weight,
+                    is_one_way: way_data.is_oneway,
+                    is_roundabout: way_data.is_roundabout,
+                    name: way_data.name.clone(),
+                    speed_limit: way_data.max_speed,
+                    prev_edge: None,
+                    next_edge: None,
+                };
+                edge_metadata.push(metadata);
 
-            let edge_index_fwd = edges.len();
-            edges.push(Edge::new(*curr_node, *next_node, metadata_index));
-            fwd_edge_list[*curr_node].push(edge_index_fwd);
-            bwd_edge_list[*next_node].push(edge_index_fwd);
+                let edge_index_fwd = edges.len();
+                edges.push(Edge::new(*curr_node, *next_node, metadata_index));
+                fwd_edge_list[*curr_node].push(edge_index_fwd);
+                bwd_edge_list[*next_node].push(edge_index_fwd);
 
-            if !(way_data.is_oneway || way_data.is_roundabout) && curr_id != next_id {
-                let edge_index_bwd = edges.len();
-                edges.push(Edge::new(*next_node, *curr_node, metadata_index));
-                fwd_edge_list[*next_node].push(edge_index_bwd);
-                bwd_edge_list[*curr_node].push(edge_index_bwd);
+                if !(way_data.is_oneway || way_data.is_roundabout) && curr_id != next_id {
+                    let edge_index_bwd = edges.len();
+                    edges.push(Edge::new(*next_node, *curr_node, metadata_index));
+                    fwd_edge_list[*next_node].push(edge_index_bwd);
+                    bwd_edge_list[*curr_node].push(edge_index_bwd);
+                }
+            }
+        } else {
+            let osm_ids = intersections_map.get_vec(&way_data.id);
+            if let Some(osm_ids) = osm_ids {
+                for (prev_id, curr_id, next_id) in osm_ids.iter().tuple_windows() {
+                    let weight = calc_weight_with_turn(*prev_id, *curr_id, *next_id, &maps);
+                    let prev_node = osm_to_dense.get(prev_id).unwrap();
+                    let next_node = osm_to_dense.get(next_id).unwrap();
+
+                    let metadata_index = edge_metadata.len();
+                    let metadata = EdgeMetadata {
+                        weight,
+                        is_one_way: way_data.is_oneway,
+                        is_roundabout: way_data.is_roundabout,
+                        name: way_data.name.clone(),
+                        speed_limit: way_data.max_speed,
+                        prev_edge: None,
+                        next_edge: None,
+                    };
+                    edge_metadata.push(metadata);
+
+                    let edge_index_fwd = edges.len();
+                    edges.push(Edge::new(*prev_node, *next_node, metadata_index));
+                    fwd_edge_list[*prev_node].push(edge_index_fwd);
+                    bwd_edge_list[*next_node].push(edge_index_fwd);
+
+                    if !way_data.is_oneway {
+                        let edge_index_bwd = edges.len();
+                        edges.push(Edge::new(*next_node, *prev_node, metadata_index));
+                        fwd_edge_list[*next_node].push(edge_index_bwd);
+                        bwd_edge_list[*prev_node].push(edge_index_bwd);
+                    }
+                }
+            } else {
+                let polyline_data = parse_polyline_data(way_data);
+                let curr_id = polyline_data.first();
+                let next_id = polyline_data.last();
+
+                if let (Some(curr_id), Some(next_id)) = (curr_id, next_id) {
+                    let weight = calc_weight_without_turn(*curr_id, *next_id, &maps);
+                    let curr_node = osm_to_dense.get(curr_id).unwrap();
+                    let next_node = osm_to_dense.get(next_id).unwrap();
+
+                    let metadata_index = edge_metadata.len();
+                    let metadata = EdgeMetadata {
+                        weight,
+                        is_one_way: way_data.is_oneway,
+                        is_roundabout: way_data.is_roundabout,
+                        name: way_data.name.clone(),
+                        speed_limit: way_data.max_speed,
+                        prev_edge: None,
+                        next_edge: None,
+                    };
+                    edge_metadata.push(metadata);
+
+                    let edge_index_fwd = edges.len();
+                    edges.push(Edge::new(*curr_node, *next_node, metadata_index));
+                    fwd_edge_list[*curr_node].push(edge_index_fwd);
+                    bwd_edge_list[*next_node].push(edge_index_fwd);
+
+                    if !(way_data.is_oneway || way_data.is_roundabout) && curr_id != next_id {
+                        let edge_index_bwd = edges.len();
+                        edges.push(Edge::new(*next_node, *curr_node, metadata_index));
+                        fwd_edge_list[*next_node].push(edge_index_bwd);
+                        bwd_edge_list[*curr_node].push(edge_index_bwd);
+                    }
+                }
             }
         }
     }
@@ -146,6 +237,35 @@ fn parse_way_max_speed(way: &Way) -> Option<u8> {
     })
 }
 
+fn create_intersections_map(path: &str) -> anyhow::Result<MultiMap<i64, i64>> {
+    let reader = ElementReader::from_path(path)?;
+
+    // Key = way_id, value = osm_id, in a multimap several values could be associated with a key
+    let mut intersections_map: MultiMap<i64, i64> = MultiMap::new();
+    let mut node_count = HashMap::new();
+
+    _ = reader.for_each(|elem| {
+        if let Element::Way(way) = elem {
+            let refs: Vec<i64> = way.refs().collect();
+            intersections_map.insert_many_from_slice(way.id(), &refs);
+            refs.iter().for_each(|id| {
+                *node_count.entry(*id).or_insert(0) += 1;
+            });
+        }
+    });
+
+    let mut filtered_way_nodes = MultiMap::new();
+    for (way_id, nodes) in intersections_map {
+        for node in &nodes {
+            if node_count[node] > 1 {
+                filtered_way_nodes.insert(way_id, *node);
+            }
+        }
+    }
+
+    Ok(filtered_way_nodes)
+}
+
 fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
     let reader = ElementReader::from_path(path)?;
 
@@ -182,6 +302,7 @@ fn parse_osmpbf(path: &str) -> anyhow::Result<PBFParseResult> {
             let refs: Vec<i64> = way.refs().collect();
 
             let way_data = WayParseData {
+                id: way.id(),
                 name,
                 max_speed,
                 is_roundabout,

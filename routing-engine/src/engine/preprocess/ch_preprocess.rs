@@ -7,7 +7,7 @@ use super::{graph::Graph, witness_search::Dijkstra};
 use priority_queue::PriorityQueue;
 
 pub fn contract_graph(mut graph: Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra) {
-    let mut queue = PriorityQueue::new();
+    let mut queue = PriorityQueue::with_capacity(graph.num_nodes());
 
     for (i, node) in graph.nodes.iter().enumerate() {
         if i != 0 && i % 10_000 == 0 {
@@ -94,17 +94,8 @@ fn contract_node(graph: &mut Graph, overlay: &mut Graph, dijkstra: &mut Dijkstra
                     combined_weight,
                     bwd_edge_index,
                     fwd_edge_index,
-                    node_id,
                 );
-                add_shortcut(
-                    graph,
-                    w,
-                    v,
-                    combined_weight,
-                    bwd_edge_index,
-                    fwd_edge_index,
-                    node_id,
-                );
+                add_shortcut(graph, w, v, combined_weight, bwd_edge_index, fwd_edge_index);
             }
         }
     }
@@ -115,9 +106,8 @@ fn add_shortcut(
     w: usize,
     v: usize,
     combined_weight: f32,
-    left_edge_index: usize,
-    right_edge_index: usize,
-    via_node: usize,
+    prev_edge_idx: usize,
+    next_edge_idx: usize,
 ) {
     let shortcut_metadata = EdgeMetadata {
         weight: combined_weight,
@@ -125,18 +115,13 @@ fn add_shortcut(
         name: None,
         is_one_way: true,
         is_roundabout: false,
+        next_edge: Some(next_edge_idx),
+        prev_edge: Some(prev_edge_idx),
     };
 
     let metadata_index = graph.edge_metadata.len();
     graph.edge_metadata.push(shortcut_metadata);
-    graph.add_shortcut_edge(
-        w,
-        v,
-        metadata_index,
-        left_edge_index,
-        right_edge_index,
-        via_node,
-    );
+    graph.add_shortcut_edge(w, v, metadata_index);
 }
 
 fn rank_node(graph: &Graph, dijkstra: &mut Dijkstra, node_id: usize) -> i32 {

@@ -33,36 +33,25 @@ impl<'a> ShortcutVisitor<'a> {
         is_fwd: bool,
         visited: &mut HashSet<usize>,
     ) {
-        if is_fwd {
-            if visited.contains(&edge.from_node) {
-                return;
-            }
-        } else {
-            if visited.contains(&edge.to_node) {
-                return;
-            }
+        let node = if is_fwd { edge.from_node } else { edge.to_node };
+        if visited.contains(&node) {
+            return;
         }
 
-        if edge.via_node.is_none() {
-            if is_fwd {
-                ShortcutVisitor::push_node(out, edge.from_node);
-                visited.insert(edge.from_node);
-            } else {
-                ShortcutVisitor::push_node(out, edge.to_node);
-                visited.insert(edge.to_node);
-            }
-        }
         if let (Some(prev_edge_id), Some(next_edge_id)) = (edge.prev_edge, edge.next_edge) {
             let prev_edge = graph.get_fwd_edge_cold(prev_edge_id);
             let next_edge = graph.get_bwd_edge_cold(next_edge_id);
 
             if is_fwd {
-                ShortcutVisitor::visit_shortcut(graph, prev_edge, out, is_fwd, visited);
-                ShortcutVisitor::visit_shortcut(graph, next_edge, out, is_fwd, visited);
+                Self::visit_shortcut(graph, prev_edge, out, is_fwd, visited);
+                Self::visit_shortcut(graph, next_edge, out, is_fwd, visited);
             } else {
-                ShortcutVisitor::visit_shortcut(graph, next_edge, out, is_fwd, visited);
-                ShortcutVisitor::visit_shortcut(graph, prev_edge, out, is_fwd, visited);
+                Self::visit_shortcut(graph, next_edge, out, is_fwd, visited);
+                Self::visit_shortcut(graph, prev_edge, out, is_fwd, visited);
             }
+        } else {
+            Self::push_node(out, node);
+            visited.insert(node);
         }
     }
 }

@@ -32,6 +32,10 @@ pub struct EdgeMetadata {
     pub is_one_way: bool,
     // Is part of a roundabout.
     pub is_roundabout: bool,
+    // Dense index of the previous edge.
+    pub prev_edge: Option<usize>,
+    // Dense index of the next edge.
+    pub next_edge: Option<usize>,
 }
 
 /// An edge
@@ -43,14 +47,6 @@ pub struct Edge {
     pub dest_id: usize,
     // The index of the metadata of the edge in 'edge_metadata'.
     pub metadata_index: usize,
-    // Flag for identifying if the edge is a shortcut or not.
-    pub is_shortcut: bool,
-    // Dense index of the previous edge.
-    pub prev_edge: Option<usize>,
-    // Dense index of the next edge.
-    pub next_edge: Option<usize>,
-    // Dense index of the node that the shortcut skips
-    pub via_node: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -143,24 +139,10 @@ impl Graph {
         edge_id
     }
 
-    pub fn add_shortcut_edge(
-        &mut self,
-        src_id: usize,
-        dest_id: usize,
-        metadata_index: usize,
-        prev_edge: usize,
-        next_edge: usize,
-        via_node: usize,
-    ) {
+    pub fn add_shortcut_edge(&mut self, src_id: usize, dest_id: usize, metadata_index: usize) {
         let edge_id_forward = self.edges.len();
-        self.edges.push(Edge::new_shortcut(
-            src_id,
-            dest_id,
-            metadata_index,
-            prev_edge,
-            next_edge,
-            via_node,
-        ));
+        self.edges
+            .push(Edge::new_shortcut(src_id, dest_id, metadata_index));
 
         self.fwd_edge_list[src_id].push(edge_id_forward);
         self.bwd_edge_list[dest_id].push(edge_id_forward);
@@ -272,29 +254,14 @@ impl Edge {
             src_id,
             dest_id,
             metadata_index,
-            is_shortcut: false,
-            prev_edge: None,
-            next_edge: None,
-            via_node: None,
         }
     }
 
-    pub fn new_shortcut(
-        src_id: usize,
-        dest_id: usize,
-        metadata_index: usize,
-        prev_edge: usize,
-        next_edge: usize,
-        via_node: usize,
-    ) -> Self {
+    pub fn new_shortcut(src_id: usize, dest_id: usize, metadata_index: usize) -> Self {
         Self {
             src_id,
             dest_id,
             metadata_index,
-            is_shortcut: true,
-            prev_edge: Some(prev_edge),
-            next_edge: Some(next_edge),
-            via_node: Some(via_node),
         }
     }
 
@@ -308,19 +275,5 @@ impl Edge {
 
     pub fn get_metadata_index(&self) -> usize {
         self.metadata_index
-    }
-
-    pub fn is_shortcut(&self) -> bool {
-        self.is_shortcut
-    }
-
-    pub fn get_prev_edge(&self) -> Option<usize> {
-        assert!(self.is_shortcut);
-        self.prev_edge
-    }
-
-    pub fn get_next_edge(&self) -> Option<usize> {
-        assert!(self.is_shortcut);
-        self.next_edge
     }
 }

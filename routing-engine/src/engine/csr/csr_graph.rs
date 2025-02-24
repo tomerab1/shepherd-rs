@@ -24,7 +24,6 @@ pub struct CSREdgeCold {
     pub name: Option<String>,
     pub from_node: usize,
     pub to_node: usize,
-    pub via_node: Option<usize>,
     pub prev_edge: Option<usize>,
     pub next_edge: Option<usize>,
 }
@@ -63,7 +62,6 @@ impl CSREdgeCold {
         name: Option<String>,
         from_node: usize,
         to_node: usize,
-        via_node: Option<usize>,
         prev_edge: Option<usize>,
         next_edge: Option<usize>,
     ) -> Self {
@@ -72,7 +70,6 @@ impl CSREdgeCold {
             name,
             from_node,
             to_node,
-            via_node,
             prev_edge,
             next_edge,
         }
@@ -100,9 +97,8 @@ impl CSRGraph {
                     metadata.name.clone(),
                     edge.src_id,
                     edge.dest_id,
-                    edge.via_node,
-                    edge.prev_edge,
-                    edge.next_edge,
+                    metadata.prev_edge,
+                    metadata.next_edge,
                 ));
 
                 fwd_cols.push(new_index);
@@ -128,9 +124,8 @@ impl CSRGraph {
                     metadata.name.clone(),
                     edge.src_id,
                     edge.dest_id,
-                    edge.via_node,
-                    edge.prev_edge,
-                    edge.next_edge,
+                    metadata.prev_edge,
+                    metadata.next_edge,
                 ));
 
                 bwd_cols.push(new_index);

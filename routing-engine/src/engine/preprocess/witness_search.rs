@@ -1,18 +1,16 @@
 use core::f32;
-use std::cmp::Ordering;
-
-use priority_queue::PriorityQueue;
+use std::{cmp::Ordering, collections::BinaryHeap};
 
 use super::graph::Graph;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct HeapItem(f32);
+struct HeapItem(usize, f32);
 
 impl Eq for HeapItem {}
 
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.0.partial_cmp(&self.0).unwrap_or(Ordering::Equal)
+        other.1.partial_cmp(&self.1).unwrap_or(Ordering::Equal)
     }
 }
 
@@ -26,7 +24,7 @@ pub struct Dijkstra {
     src: usize,
     ignore: usize,
     weights: Vec<f32>,
-    queue: PriorityQueue<usize, HeapItem>,
+    queue: BinaryHeap<HeapItem>,
 }
 
 impl Dijkstra {
@@ -35,7 +33,7 @@ impl Dijkstra {
             src: 0,
             ignore: 0,
             weights: vec![f32::INFINITY; num_nodes],
-            queue: PriorityQueue::new(),
+            queue: BinaryHeap::with_capacity(num_nodes),
         }
     }
 
@@ -44,7 +42,7 @@ impl Dijkstra {
 
         self.src = src;
         self.ignore = ignore;
-        self.queue.push(self.src, HeapItem(0.0));
+        self.queue.push(HeapItem(self.src, 0.0));
         self.weights[self.src] = 0.0;
     }
 
@@ -61,12 +59,8 @@ impl Dijkstra {
         max_hops: usize,
     ) -> f32 {
         let mut num_hops = 0;
-        while let Some((curr_id, HeapItem(weight))) = self.queue.pop() {
+        while let Some(HeapItem(curr_id, weight)) = self.queue.pop() {
             if weight > limit_weight {
-                return self.weights[dest];
-            }
-
-            if self.weights[dest] <= limit_weight {
                 return self.weights[dest];
             }
 
@@ -82,10 +76,9 @@ impl Dijkstra {
                 if weight == f32::INFINITY {
                     continue;
                 }
-                let adj_weight = self.weights[neighbor_id];
-                if weight < adj_weight || adj_weight == f32::INFINITY {
+                if weight < self.weights[neighbor_id] {
                     self.weights[neighbor_id] = weight;
-                    self.queue.push(neighbor_id, HeapItem(weight));
+                    self.queue.push(HeapItem(neighbor_id, weight))
                 }
             }
 

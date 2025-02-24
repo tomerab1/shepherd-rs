@@ -26,8 +26,13 @@ pub fn calc_turn_cost(
     next_lat: f32,
     next_lon: f32,
 ) -> f32 {
-    let u_v: Vec2 = Vec2::new(prev_lat - curr_lat, prev_lon - curr_lon).normalize();
-    let v_w = Vec2::new(curr_lat - next_lat, prev_lon - next_lon).normalize();
+    let v1 = Vec2::new(curr_lat - prev_lat, curr_lon - prev_lon).normalize();
+    let v2 = Vec2::new(next_lat - curr_lat, next_lon - curr_lon).normalize();
 
-    1.0 - u_v.dot(v_w).acos()
+    let dot = v1.dot(v2).clamp(-1.0, 1.0);
+
+    let k = 1.0;
+    let turn_multiplier = 1.0 + k * (1.0 - dot);
+
+    turn_multiplier
 }
