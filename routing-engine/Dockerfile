@@ -7,7 +7,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked && strip target/release/shepherd
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
+# CA roots for HTTPS (live traffic feed).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 shepherd
 COPY --from=build /src/target/release/shepherd /usr/local/bin/shepherd
 USER shepherd
