@@ -46,14 +46,21 @@ node-based graph (6.6× fewer CCH edges than edge-based). Serving both profiles 
 `walking` (footpaths/steps/pedestrian streets, no one-way or turn rules, no motorways/trunks unless
 there is a sidewalk; node-based graph). Each profile is its own graph file.
 
-**Traffic lights:** OSM maps a signalised intersection with several light nodes, one per approach
-or carriageway: 67% of Israel's 10.6k light nodes have another within 40 m. So lights are grouped
-into intersections and a route pays **one wait per intersection**. Stop-line lights near a junction
-apply only to traffic heading into it (explicit `traffic_signals:direction` tags win). Pedestrian
-`crossing=traffic_signals` lights count for walking. Waits are applied by the metric, not baked in.
+**Traffic lights:** OSM maps a signalised intersection with several light nodes, one per approach,
+carriageway or crossing, and often only on some of its legs. So waits are per **intersection**,
+not per light node:
+- Lights within 40 m of each other form one intersection.
+- Every junction within 25 m of one of its lights belongs to it. So do junctions linked to those by
+  internal segments under 30 m (dual carriageways, slip lanes).
+- Driving *through* any junction of a signalised intersection costs one wait. Lights far from any
+  junction are mid-block crossings.
+
+On 8 test routes, every signalised intersection driven through is counted (`examples/route_lights`
+checks this). Pedestrian `crossing=traffic_signals` lights count for walking. Waits are applied by
+the metric, not baked in:
 - `signal_mode=estimate` (default): lights without data get a typical wait (12 s per intersection
   for cars, Webster's `C·(1−g/C)²/2` with C = 90 s and g/C = 0.45).
-- `signal_mode=timed-only`: only lights you uploaded timing for count; the rest are ignored.
+- `signal_mode=timed-only`: only intersections you uploaded timing for count; the rest are ignored.
 - `signal_mode=off`: lights are ignored entirely.
 
 Routes list the intersections with lights they pass.
@@ -97,6 +104,7 @@ OSRM-compatible where it overlaps, so OSRM clients work.
 |---|---|
 | `GET /route/v1/{driving\|foot}/{lon,lat;lon,lat;...}` | `steps=true`, `overview=full\|false`, `geometries=polyline\|polyline6\|geojson`, `exclude=judea-samaria`. Up to 25 waypoints. Response adds `traffic_lights` and `metric_version` |
 | `GET /nearest/v1/{profile}/{lon,lat}` | Snapped position, road name, OSM way id |
+| `GET /lights/v1/{profile}?bbox=w,s,e,n` | Traffic lights in a box (≤ 0.5°), one per intersection |
 | `GET /health` | Loaded profiles, graph stats, metric versions |
 | `GET /metrics` | Prometheus: request counts, latency histogram, metric versions |
 | `POST /admin/updates?profile=driving` | Live traffic, closures, signal timing, `signal_mode` (below) |
@@ -130,7 +138,8 @@ The app starts the bundled engine on `127.0.0.1:5057` and stops it on quit. Feat
 - Drive / Walk modes, "Avoid Judea & Samaria"
 - Start and destination by **address or place name** (Apple MapKit autocomplete, Hebrew or
   English), `lat, lon`, clicking the map, or **Use my location**
-- Traffic settings: traffic-light mode, and a HERE API key (kept in the Keychain) for live traffic
+- Traffic settings: traffic-light mode, all lights in view when zoomed in, and a HERE API key
+  (kept in the Keychain) for live traffic
 - Turn-by-turn steps, traffic lights on the map
 - **Navigation**:
   - Next maneuver and distance to it

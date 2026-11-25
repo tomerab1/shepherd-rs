@@ -123,6 +123,10 @@ impl Signal {
 pub const SIGNAL_CLUSTER_M: f64 = 40.0;
 /// A light this close to a segment end is that junction's stop line.
 pub const APPROACH_M: f64 = 50.0;
+/// Junctions this close to a light belong to its signalised intersection.
+pub const INTERSECTION_M: f64 = 25.0;
+/// Segments shorter than this between junctions are internal links of one intersection.
+pub const INTERNAL_LINK_M: f32 = 30.0;
 
 pub const NONE_ID: u32 = u32::MAX;
 
@@ -138,6 +142,8 @@ pub struct Network {
     pub names: NameTable,
     /// Traffic lights. Their delay is applied by the metric, so it can change at runtime.
     pub signals: Vec<Signal>,
+    /// Per junction: the signalised intersection (light cluster) it belongs to, or `NONE_ID`.
+    pub junction_cluster: Vec<u32>,
 }
 
 #[inline]
@@ -314,6 +320,22 @@ impl Network {
             }
         }
         cluster_signals(&mut net.signals);
+        net.junction_cluster = attach_junctions(&net.junctions, &mut net.signals);
+        // Junctions joined to a signalised junction by a very short segment are part of the
+        // same intersection (dual-carriageway crossings, slip lanes, internal links).
+        for _ in 0..2 {
+            for seg in &net.segments {
+                if seg.length_m < INTERNAL_LINK_M {
+                    let (a, b) = (seg.from as usize, seg.to as usize);
+                    match (net.junction_cluster[a], net.junction_cluster[b]) {
+                        (NONE_ID, NONE_ID) => {}
+                        (c, NONE_ID) => net.junction_cluster[b] = c,
+                        (NONE_ID, c) => net.junction_cluster[a] = c,
+                        _ => {}
+                    }
+                }
+            }
+        }
         net
     }
 
@@ -361,4 +383,56 @@ fn cluster_signals(signals: &mut [Signal]) {
     for i in 0..n {
         signals[i].cluster = find(&mut parent, i as u32);
     }
+}
+
+/// Makes every junction within `INTERSECTION_M` of a light part of that light's intersection
+/// (nearest light wins), and marks lights near a junction as intersection lights
+/// (`approach = 1`); the rest are mid-block crossings. OSM often tags only some legs, only
+/// the opposite carriageway, or only the cross street, so a route can pass through a
+/// signalised intersection without touching any light node; reasoning per junction fixes that.
+fn attach_junctions(junctions: &[Coord], signals: &mut [Signal]) -> Vec<u32> {
+    let mut out = vec![NONE_ID; junctions.len()];
+    let mut best = vec![f64::MAX; junctions.len()];
+    let cell_deg = INTERSECTION_M / 111_000.0;
+    let cell = |c: Coord| ((c.lat() / cell_deg).floor() as i64, (c.lon() / cell_deg).floor() as i64);
+    // Index only junctions near some light.
+    let wanted: std::collections::HashSet<(i64, i64)> = signals
+        .iter()
+        .flat_map(|s| {
+            let (y, x) = cell(s.coord);
+            (-1..=1).flat_map(move |dy| (-1..=1).map(move |dx| (y + dy, x + dx)))
+        })
+        .collect();
+    let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+    for (j, &c) in junctions.iter().enumerate() {
+        let k = cell(c);
+        if wanted.contains(&k) {
+            grid.entry(k).or_default().push(j as u32);
+        }
+    }
+    for s in signals.iter_mut() {
+        if s.junction != NONE_ID {
+            // A light on the junction node itself.
+            out[s.junction as usize] = s.cluster;
+            best[s.junction as usize] = 0.0;
+        }
+        let (y, x) = cell(s.coord);
+        let mut near_any = s.junction != NONE_ID;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                for &j in grid.get(&(y + dy, x + dx)).map(Vec::as_slice).unwrap_or(&[]) {
+                    let d = haversine(s.coord, junctions[j as usize]);
+                    if d <= INTERSECTION_M {
+                        near_any = true;
+                        if d < best[j as usize] {
+                            best[j as usize] = d;
+                            out[j as usize] = s.cluster;
+                        }
+                    }
+                }
+            }
+        }
+        s.approach = near_any as u8;
+    }
+    out
 }

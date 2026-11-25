@@ -424,3 +424,22 @@ fn one_wait_per_intersection_and_signal_modes() {
     assert_eq!(timed.routes[0].traffic_lights.len(), 1);
     assert!((timed.routes[0].duration - off.routes[0].duration - 30.0).abs() < 1.0);
 }
+
+#[test]
+fn lights_mapped_only_on_the_cross_street_still_count() {
+    // The light node sits 15 m up the cross street from junction (2,1) (a stop line on the
+    // side road). A route straight along row 1 drives through that signalised intersection.
+    let mut g = Grid::new(5, 3);
+    let j = coord(2, 1);
+    let up = coord(2, 2);
+    let light_node = 9_000;
+    let at = Coord::from_deg(j.lat() + (up.lat() - j.lat()) * 0.07, j.lon());
+    g.osm.nodes.push((light_node, at));
+    g.osm.nodes.sort_by_key(|n| n.0);
+    let id = Grid::way_id(node(2, 1), node(2, 2));
+    g.osm.ways.iter_mut().find(|w| w.id == id).unwrap().refs = vec![node(2, 1), light_node, node(2, 2)];
+    g.osm.signals = vec![(light_node, routing_engine::osm::SIG_VEHICLE)];
+    let e = g.engine();
+    let r = e.route(&[mid((0, 1), (1, 1)), mid((3, 1), (4, 1))], &RouteOptions::default()).unwrap();
+    assert_eq!(r.routes[0].traffic_lights.len(), 1, "straight through a signalised intersection");
+}

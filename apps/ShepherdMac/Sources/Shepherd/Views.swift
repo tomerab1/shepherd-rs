@@ -160,6 +160,10 @@ struct Sidebar: View {
             StepList()
         }
         }
+        // Keep scrolled content below the window's title-bar buttons: a view only extends into
+        // the title-bar safe area when it touches it, so a 1 pt inset plus clipping stops that.
+        .padding(.top, 1)
+        .clipped()
     }
 }
 
@@ -260,6 +264,9 @@ struct TrafficSettings: View {
                 Text("“Only with timing data” ignores lights that have no real timing (uploaded via the admin API).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Show all traffic lights when zoomed in", isOn: $model.showAllLights)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: model.showAllLights) { if !model.showAllLights { model.viewLights = [] } }
                 Divider()
                 HStack {
                     SecureField("HERE API key", text: $model.hereKey)
@@ -479,6 +486,11 @@ struct MapPane: View {
                     MapPolyline(coordinates: model.routeCoords)
                         .stroke(.blue, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                 }
+                ForEach(Array(model.viewLights.enumerated()), id: \.offset) { _, c in
+                    Annotation("", coordinate: c, anchor: .center) {
+                        TrafficLightIcon().scaleEffect(0.75).opacity(0.45)
+                    }
+                }
                 ForEach(Array((model.route?.lights ?? []).enumerated()), id: \.offset) { _, c in
                     Annotation("", coordinate: c, anchor: .center) {
                         TrafficLightIcon()
@@ -514,6 +526,7 @@ struct MapPane: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+            .onMapCameraChange(frequency: .onEnd) { ctx in model.mapRegionChanged(ctx.region) }
             .mapControls {
                 MapZoomStepper()
                 MapCompass()

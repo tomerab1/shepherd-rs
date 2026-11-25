@@ -241,5 +241,6 @@ pub fn build_graph(osm: &OsmData, source_name: &str, profile: Profile) -> Graph 
         grid_first: grid.first.into(),
         grid_items: grid.items.into(),
         signals: net.signals.into(),
+        junction_cluster: net.junction_cluster.into(),
     }
 }

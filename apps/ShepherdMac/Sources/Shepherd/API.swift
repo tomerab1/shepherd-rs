@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MapKit
 
 // MARK: - Response models (OSRM-compatible subset returned by the shepherd server)
 
@@ -160,6 +161,18 @@ struct RoutingClient {
     }
 
     func feedStatus() async throws -> FeedStatus { try await get("admin/traffic-feed") }
+
+    struct Lights: Decodable { let lights: [[Double]] }
+
+    /// Traffic lights inside a region (one per intersection).
+    func lights(in r: MKCoordinateRegion, profile: String) async throws -> [CLLocationCoordinate2D] {
+        let (s, n) = (r.center.latitude - r.span.latitudeDelta / 2, r.center.latitude + r.span.latitudeDelta / 2)
+        let (w, e) = (r.center.longitude - r.span.longitudeDelta / 2, r.center.longitude + r.span.longitudeDelta / 2)
+        let res: Lights = try await get(
+            "lights/v1/\(profile)",
+            query: [.init(name: "bbox", value: String(format: "%.5f,%.5f,%.5f,%.5f", w, s, e, n))])
+        return res.lights.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
+    }
 
     func clearUpdates(profile: String) async throws -> UpdateResult {
         try await send("DELETE", "admin/updates?profile=\(profile)")

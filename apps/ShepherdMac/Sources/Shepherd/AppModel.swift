@@ -57,6 +57,9 @@ final class AppModel {
     let endSearch = PlaceSearch()
 
     // Traffic lights & live traffic
+    var showAllLights = true
+    var viewLights: [CLLocationCoordinate2D] = []
+    private var lightsTask: Task<Void, Never>?
     var signalMode = "estimate"
     var feed: FeedStatus?
     var hereKey = Keychain.get("here-api-key") ?? ""
@@ -200,6 +203,22 @@ final class AppModel {
             await computeRoute(fit: false)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Loads every traffic light in the visible region when zoomed in far enough.
+    func mapRegionChanged(_ r: MKCoordinateRegion) {
+        lightsTask?.cancel()
+        guard showAllLights, r.span.latitudeDelta < 0.05, r.span.longitudeDelta < 0.06 else {
+            viewLights = []
+            return
+        }
+        lightsTask = Task {
+            try? await Task.sleep(for: .milliseconds(150)) // debounce
+            guard !Task.isCancelled else { return }
+            if let l = try? await client.lights(in: r, profile: mode.profile) {
+                viewLights = l
+            }
         }
     }
 

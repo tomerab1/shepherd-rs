@@ -69,7 +69,7 @@ pub struct MetricState {
     /// Edge-based graphs: arcs whose tail is already inside the next junction's intersection
     /// (they skip its light wait).
     pub arc_skip: Arc<Vec<u64>>,
-    /// Wait per traffic light in deciseconds under this metric (0 = ignored).
+    /// Wait per signalised intersection (indexed by cluster id) in deciseconds (0 = ignored).
     pub signal_waits: Arc<Vec<u32>>,
     pub version: u64,
     pub customize_ms: f64,
@@ -223,7 +223,7 @@ impl Engine {
     }
 
     /// Traffic lights a leg waits at (one per intersection), in travel order.
-    pub fn signals_on(&self, m: &MetricState, pieces: &[Piece]) -> Vec<u32> {
+    pub fn signals_on(&self, m: &MetricState, pieces: &[Piece]) -> Vec<Coord> {
         crate::signals::route_lights(&self.graph, &self.signal_index, &m.signal_waits, pieces)
     }
 
@@ -469,12 +469,15 @@ pub fn build_metric(g: &Graph, ov: &Overrides, version: u64) -> MetricState {
     // and skipped on arcs whose tail is already inside that intersection. Node-based: the
     // arc itself passes its end junction.
     let node_based = g.meta.node_based;
-    let junction_wait = |j: u32| idx.by_junction.get(&j).map_or(0, |&s| waits[s as usize]);
+    let junction_wait = |j: u32| match g.junction_cluster[j as usize] {
+        crate::network::NONE_ID => 0,
+        c => waits[c as usize],
+    };
     let elem_entry: Vec<u32> = (0..g.elem_dseg.len() as u32)
         .into_par_iter()
         .map(|e| {
             if node_based {
-                crate::signals::end_junction_signal(g, &idx, &waits, e).map_or(0, |s| waits[s as usize])
+                crate::signals::end_junction_signal(g, &idx, &waits, e).map_or(0, |c| waits[c as usize])
             } else {
                 junction_wait(g.elem_start_junction(e))
             }

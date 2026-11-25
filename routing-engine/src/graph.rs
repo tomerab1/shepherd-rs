@@ -66,6 +66,8 @@ pub struct Graph {
     pub grid_first: Arr<u32>,
     pub grid_items: Arr<u32>,
     pub signals: Arr<crate::network::Signal>,
+    /// Per junction: its signalised intersection (cluster id = index of a member light).
+    pub junction_cluster: Arr<u32>,
 }
 
 impl Graph {
@@ -181,6 +183,7 @@ impl Graph {
         w.add("grid_first", &self.grid_first[..])?;
         w.add("grid_items", &self.grid_items[..])?;
         w.add("signals", &self.signals[..])?;
+        w.add("junction_cluster", &self.junction_cluster[..])?;
         w.finish()?;
         // Atomic replace so a running server can keep using the old mapping.
         std::fs::rename(&tmp, path)?;
@@ -220,6 +223,7 @@ impl Graph {
             grid_first: r.get("grid_first")?,
             grid_items: r.get("grid_items")?,
             signals: r.get("signals")?,
+            junction_cluster: r.get("junction_cluster")?,
         })
     }
 }

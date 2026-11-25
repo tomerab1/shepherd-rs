@@ -65,6 +65,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/route/v1/{profile}/{coords}", get(route_handler))
         .route("/nearest/v1/{profile}/{coord}", get(nearest_handler))
+        .route("/lights/v1/{profile}", get(lights_handler))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route(
@@ -210,6 +211,35 @@ async fn nearest_handler(State(st): State<Arc<AppState>>, Path((profile, coord))
         }
         None => osrm_error(StatusCode::BAD_REQUEST, "NoSegment", "no road nearby"),
     }
+}
+
+#[derive(Deserialize)]
+struct LightsParams {
+    /// `west,south,east,north`
+    bbox: String,
+}
+
+/// Traffic lights (one per intersection) inside a bounding box, as `[lon, lat]` points.
+async fn lights_handler(
+    State(st): State<Arc<AppState>>,
+    Path(profile): Path<String>,
+    Query(p): Query<LightsParams>,
+) -> Response {
+    let Some(slot) = st.slot(&profile) else {
+        return unknown_profile(&profile, &st);
+    };
+    let b: Vec<f64> = p.bbox.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    if b.len() != 4 || b[2] - b[0] > 0.5 || b[3] - b[1] > 0.5 {
+        return osrm_error(StatusCode::BAD_REQUEST, "InvalidQuery", "bbox must be west,south,east,north and at most 0.5 degrees");
+    }
+    let engine = slot.engine.load();
+    let m = engine.metric();
+    let lights = crate::signals::lights_in(&engine.graph, &m.signal_waits, [b[0], b[1], b[2], b[3]], 3000);
+    Json(json!({
+        "code": "Ok",
+        "lights": lights.iter().map(|c| [c.lon(), c.lat()]).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 async fn health(State(st): State<Arc<AppState>>) -> Response {
