@@ -146,7 +146,7 @@ The app starts the bundled engine on `127.0.0.1:5057` and stops it on quit. Feat
   - Remaining distance; time left at your measured pace (walking) or traffic-aware (driving)
   - Arrival time and current speed
   - Re-routes automatically when you leave the route
-  - **Simulate** moves along the route to try it at a desk
+  - **Simulate** plays the route at 1×, 5× or 20× (switchable during navigation)
 - Live incidents: click a road to close it or add a jam, and see the route change
 
 ## Operations

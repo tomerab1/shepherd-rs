@@ -149,10 +149,8 @@ struct Sidebar: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
-                        Toggle("Simulate", isOn: $model.simulate)
-                            .toggleStyle(.checkbox)
-                            .help("Move along the route instead of using your real location")
                     }
+                    SimulateControls()
                 }
             }
             .padding()
@@ -334,6 +332,33 @@ struct Summary: View {
     }
 }
 
+/// "Simulate" checkbox and playback speed, usable before and during navigation.
+struct SimulateControls: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        HStack {
+            Toggle("Simulate", isOn: $model.simulate)
+                .toggleStyle(.checkbox)
+                .help("Move along the route instead of using your real location")
+                .onChange(of: model.simulate) { model.simulationSettingsChanged() }
+            if model.simulate {
+                Picker("Speed", selection: $model.simMultiplier) {
+                    Text("1×").tag(1.0)
+                    Text("5×").tag(5.0)
+                    Text("20×").tag(20.0)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 130)
+                .onChange(of: model.simMultiplier) { model.simulationSettingsChanged() }
+            }
+        }
+        .font(.callout)
+    }
+}
+
 struct NavigationCard: View {
     @Environment(AppModel.self) private var model
 
@@ -387,6 +412,7 @@ struct NavigationCard: View {
                 }
             }
             .font(.callout)
+            SimulateControls()
             Button(role: .destructive) {
                 model.stopNavigation()
             } label: {

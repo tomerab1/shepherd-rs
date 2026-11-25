@@ -85,6 +85,8 @@ final class AppModel {
     var waitingForLocation = false
     var navigating = false
     var simulate = false
+    /// Simulation playback speed (1x = real time).
+    var simMultiplier: Double = 5
     var nav = NavState()
     var track: RouteTrack?
     var fix: CLLocationCoordinate2D?
@@ -352,12 +354,27 @@ final class AppModel {
         navigating = true
         nav = NavState()
         selectedStep = nil
+        startPositionSource(from: 0)
+    }
+
+    /// Feeds positions from the simulator or the device, depending on `simulate`.
+    private func startPositionSource(from along: Double) {
+        simulator.stop()
         if simulate, let track {
-            simulator.start(track: track, speed: mode.simSpeed) { [weak self] loc in self?.handleFix(loc) }
+            location.stop()
+            simulator.start(track: track, from: along, speed: mode.simSpeed, multiplier: simMultiplier) { [weak self] loc in
+                self?.handleFix(loc)
+            }
         } else {
             location.start()
             if let last = location.last { handleFix(last) }
         }
+    }
+
+    /// Called when Simulate or its speed changes; switches the running navigation over.
+    func simulationSettingsChanged() {
+        guard navigating, !nav.arrived else { return }
+        startPositionSource(from: nav.along)
     }
 
     func stopNavigation() {

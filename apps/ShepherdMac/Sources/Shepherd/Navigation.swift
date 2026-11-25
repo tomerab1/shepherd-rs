@@ -150,21 +150,32 @@ final class RouteSimulator {
     private var timer: Timer?
     private var along = 0.0
 
-    func start(track: RouteTrack, speed: Double, onFix: @escaping (CLLocation) -> Void) {
+    /// Plays the route from `from` meters at `speed` m/s, `multiplier` times faster than
+    /// real time. Fixes report the real `speed`, so pace-based estimates stay realistic.
+    func start(track: RouteTrack, from: Double = 0, speed: Double, multiplier: Double,
+               onFix: @escaping (CLLocation) -> Void) {
         stop()
-        along = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        along = min(max(0, from), track.total)
+        let tick = 0.5
+        let emit = { [weak self] in
+            guard let self else { return }
+            let c = Self.point(track, at: self.along)
+            let ahead = Self.point(track, at: min(track.total, self.along + 5))
+            onFix(CLLocation(coordinate: c, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: -1,
+                             course: Self.bearing(c, ahead), speed: speed, timestamp: Date()))
+        }
+        emit() // show the position right away instead of "waiting for location"
+        let t = Timer(timeInterval: tick, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.along = min(track.total, self.along + speed)
-                let c = Self.point(track, at: self.along)
-                let ahead = Self.point(track, at: min(track.total, self.along + 5))
-                let course = Self.bearing(c, ahead)
-                onFix(CLLocation(coordinate: c, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: -1,
-                                 course: course, speed: speed, timestamp: Date()))
+                self.along = min(track.total, self.along + speed * multiplier * tick)
+                emit()
                 if self.along >= track.total { self.stop() }
             }
         }
+        // .common keeps it running while the user scrolls the sidebar or drags the map.
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     func stop() {
