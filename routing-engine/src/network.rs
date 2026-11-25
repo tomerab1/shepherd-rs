@@ -86,7 +86,7 @@ impl NameTable {
 }
 
 /// A traffic light: either at a junction (`junction != NONE_ID`) or inside a segment at
-/// `fraction` of its length (typically a pedestrian crossing).
+/// `fraction` of its length (a stop line before a junction, or a pedestrian crossing).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Signal {
@@ -95,8 +95,34 @@ pub struct Signal {
     pub junction: u32,
     pub segment: u32,
     pub fraction: f32,
-    pub _pad: u32,
+    /// Lights within ~40 m of each other form one intersection; one wait per intersection.
+    pub cluster: u32,
+    /// `SIGDIR_*`: which direction of its segment the light applies to.
+    pub dir: u8,
+    /// True for stop-line lights near a junction (an intersection wait, not a crossing).
+    pub approach: u8,
+    pub _pad: [u8; 6],
 }
+
+pub const SIGDIR_BOTH: u8 = 0;
+pub const SIGDIR_FORWARD: u8 = 1;
+pub const SIGDIR_BACKWARD: u8 = 2;
+
+impl Signal {
+    #[inline]
+    pub fn applies(&self, forward: bool) -> bool {
+        match self.dir {
+            SIGDIR_FORWARD => forward,
+            SIGDIR_BACKWARD => !forward,
+            _ => true,
+        }
+    }
+}
+
+/// Lights closer than this belong to the same intersection.
+pub const SIGNAL_CLUSTER_M: f64 = 40.0;
+/// A light this close to a segment end is that junction's stop line.
+pub const APPROACH_M: f64 = 50.0;
 
 pub const NONE_ID: u32 = u32::MAX;
 
@@ -121,7 +147,17 @@ fn deciseconds(length_m: f64, speed_kmh: f32, extra_s: f64) -> u32 {
 }
 
 impl Network {
-    pub fn build(osm: &OsmData, _profile: Profile) -> Network {
+    pub fn build(osm: &OsmData, profile: Profile) -> Network {
+        // Which lights count for this profile: vehicle lights for cars; for pedestrians also
+        // the lights of signalised crossings.
+        let wanted = |flags: u8| {
+            let kinds = if profile == Profile::Foot {
+                crate::osm::SIG_VEHICLE | crate::osm::SIG_CROSSING
+            } else {
+                crate::osm::SIG_VEHICLE
+            };
+            flags & kinds != 0
+        };
         // Split each way into runs of consecutive nodes that have coordinates.
         let mut runs: Vec<(usize, Vec<i64>)> = Vec::with_capacity(osm.ways.len());
         for (wi, way) in osm.ways.iter().enumerate() {
@@ -168,7 +204,7 @@ impl Network {
             *junction_of.entry(osm_id).or_insert_with(|| {
                 net.junctions.push(osm.node(osm_id).unwrap());
                 net.junction_osm.push(osm_id);
-                net.junction_signal.push(osm.is_signal(osm_id));
+                net.junction_signal.push(wanted(osm.signal_flags(osm_id)));
                 (net.junctions.len() - 1) as u32
             })
         };
@@ -199,28 +235,49 @@ impl Network {
                 let to = junction(piece[piece.len() - 1], &mut net);
                 let geom_start = net.geometry.len() as u32;
                 let mut length = 0.0;
-                let mut interior: Vec<(i64, Coord, f64)> = Vec::new();
+                let mut interior: Vec<(i64, Coord, f64, u8)> = Vec::new();
                 let mut prev = None;
                 for (k, &id) in piece.iter().enumerate() {
                     let c = osm.node(id).unwrap();
                     if let Some(pc) = prev {
                         length += haversine(pc, c);
                     }
-                    if k > 0 && k + 1 < piece.len() && osm.is_signal(id) {
-                        interior.push((id, c, length));
+                    let sf = osm.signal_flags(id);
+                    if k > 0 && k + 1 < piece.len() && wanted(sf) {
+                        interior.push((id, c, length, sf));
                     }
                     net.geometry.push(c);
                     prev = Some(c);
                 }
                 let seg_id = net.segments.len() as u32;
-                for (osm_id, coord, at) in interior {
+                for (osm_id, coord, at, sf) in interior {
+                    // Explicit direction tags win (segments follow the way's node order).
+                    // Otherwise a light close to one end is that junction's stop line and
+                    // only applies to traffic heading into it. Pedestrians wait both ways.
+                    let to_end = length - at;
+                    let (dir, approach) = if profile == Profile::Foot {
+                        (SIGDIR_BOTH, 0)
+                    } else if sf & crate::osm::SIG_FORWARD != 0 {
+                        (SIGDIR_FORWARD, 1)
+                    } else if sf & crate::osm::SIG_BACKWARD != 0 {
+                        (SIGDIR_BACKWARD, 1)
+                    } else if to_end <= APPROACH_M && to_end < at {
+                        (SIGDIR_FORWARD, 1)
+                    } else if at <= APPROACH_M {
+                        (SIGDIR_BACKWARD, 1)
+                    } else {
+                        (SIGDIR_BOTH, 0)
+                    };
                     net.signals.push(Signal {
                         osm_id,
                         coord,
                         junction: NONE_ID,
                         segment: seg_id,
                         fraction: if length > 0.0 { (at / length) as f32 } else { 0.0 },
-                        _pad: 0,
+                        cluster: 0,
+                        dir,
+                        approach,
+                        _pad: [0; 6],
                     });
                 }
                 let extra = 0.0;
@@ -249,15 +306,59 @@ impl Network {
                     junction: j as u32,
                     segment: NONE_ID,
                     fraction: 0.0,
-                    _pad: 0,
+                    cluster: 0,
+                    dir: SIGDIR_BOTH,
+                    approach: 0,
+                    _pad: [0; 6],
                 });
             }
         }
+        cluster_signals(&mut net.signals);
         net
     }
 
     #[inline]
     pub fn geometry_of(&self, seg: &Segment) -> &[Coord] {
         &self.geometry[seg.geom_start as usize..(seg.geom_start + seg.geom_len) as usize]
+    }
+}
+
+/// Groups lights closer than `SIGNAL_CLUSTER_M` (transitively) into intersections.
+fn cluster_signals(signals: &mut [Signal]) {
+    let n = signals.len();
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    fn find(p: &mut [u32], mut x: u32) -> u32 {
+        while p[x as usize] != x {
+            p[x as usize] = p[p[x as usize] as usize];
+            x = p[x as usize];
+        }
+        x
+    }
+    // Hash lights into cells of the cluster radius; compare with the 3x3 neighbourhood.
+    let cell_deg = SIGNAL_CLUSTER_M / 111_000.0;
+    let cell = |c: Coord| ((c.lat() / cell_deg).floor() as i64, (c.lon() / cell_deg).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+    for (i, s) in signals.iter().enumerate() {
+        grid.entry(cell(s.coord)).or_default().push(i as u32);
+    }
+    for (i, s) in signals.iter().enumerate() {
+        let (cy, cx) = cell(s.coord);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(list) = grid.get(&(cy + dy, cx + dx)) {
+                    for &j in list {
+                        if (j as usize) > i && haversine(s.coord, signals[j as usize].coord) <= SIGNAL_CLUSTER_M {
+                            let (a, b) = (find(&mut parent, i as u32), find(&mut parent, j));
+                            if a != b {
+                                parent[a as usize] = b;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..n {
+        signals[i].cluster = find(&mut parent, i as u32);
     }
 }

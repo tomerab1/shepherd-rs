@@ -40,6 +40,16 @@ enum Cmd {
         /// Avoidable area as `name=path.geojson`; routes with `exclude=name` stay out of it.
         #[arg(long = "avoid-area")]
         avoid_areas: Vec<String>,
+        /// HERE API key for live traffic (or set HERE_API_KEY). Without one, no feed runs.
+        #[arg(long, env = "HERE_API_KEY", hide_env_values = true)]
+        here_key: Option<String>,
+        /// Seconds between traffic polls (the free HERE plan allows ~1000 requests/day; Israel
+        /// is 8 tiles per poll, so keep this at 900 s or more).
+        #[arg(long, default_value_t = 900)]
+        traffic_interval_s: u64,
+        /// Override the HERE base URL (tests, proxies).
+        #[arg(long, default_value = routing_engine::traffic_feed::FeedConfig::DEFAULT_URL)]
+        here_url: String,
     },
     /// Find a boundary relation in a PBF and write it as an avoidable-area GeoJSON.
     ExtractArea {
@@ -103,7 +113,15 @@ fn main() -> anyhow::Result<()> {
             bind,
             max_concurrent,
             avoid_areas,
+            here_key,
+            traffic_interval_s,
+            here_url,
         } => {
+            let feed = here_key.filter(|k| !k.is_empty()).map(|api_key| routing_engine::traffic_feed::FeedConfig {
+                api_key,
+                base_url: here_url,
+                interval: std::time::Duration::from_secs(traffic_interval_s.max(60)),
+            });
             let mut areas = Vec::new();
             for spec in avoid_areas {
                 let (name, path) = spec
@@ -116,7 +134,7 @@ fn main() -> anyhow::Result<()> {
                 .max_blocking_threads(threads * 2)
                 .enable_all()
                 .build()?;
-            rt.block_on(server::serve(graphs, areas, bind, max_concurrent.unwrap_or(threads)))?;
+            rt.block_on(server::serve(graphs, areas, bind, max_concurrent.unwrap_or(threads), feed))?;
         }
         Cmd::Route { graph, coords } => {
             let engine = server::load_engine(&graph, &[])?;

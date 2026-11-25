@@ -53,6 +53,13 @@ final class EngineProcess {
         let p = Process()
         p.executableURL = binary
         p.arguments = args
+        var env = ProcessInfo.processInfo.environment
+        if let key = Keychain.get("here-api-key"), !key.isEmpty {
+            env["HERE_API_KEY"] = key
+        } else {
+            env.removeValue(forKey: "HERE_API_KEY")
+        }
+        p.environment = env
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let log = try FileHandle(forWritingTo: logURL)
         p.standardOutput = log
@@ -73,6 +80,15 @@ final class EngineProcess {
         req.timeoutInterval = 0.5
         guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
         return (resp as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// Restarts the engine we started (e.g. after the traffic API key changed).
+    func restart() async throws {
+        stop()
+        for _ in 0..<50 where await isUp() {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await startIfNeeded()
     }
 
     func stop() {

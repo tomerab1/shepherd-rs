@@ -52,6 +52,8 @@ pub struct Slot {
 
 pub struct AppState {
     pub slots: Vec<Slot>,
+    pub feed_status: parking_lot::Mutex<crate::traffic_feed::FeedStatus>,
+    pub feed_now: tokio::sync::Notify,
     pub areas: Vec<(String, crate::area::Area)>,
     pub admin_token: Option<String>,
     pub limiter: Semaphore,
@@ -69,6 +71,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/admin/updates",
             get(list_updates).post(apply_updates).delete(clear_updates),
         )
+        .route("/admin/traffic-feed", get(feed_status).post(feed_poll_now))
         .with_state(state)
 }
 
@@ -346,6 +349,8 @@ pub struct UpdateRequest {
     pub reopen: Vec<Selector>,
     #[serde(default)]
     pub signals: Vec<SignalUpdate>,
+    /// `estimate` (default), `timed-only` (ignore lights without timing data) or `off`.
+    pub signal_mode: Option<crate::signals::SignalMode>,
 }
 
 fn select(g: &Graph, s: &Selector) -> Result<(Vec<u32>, [bool; 2]), String> {
@@ -420,6 +425,9 @@ pub fn apply(engine: &Engine, req: &UpdateRequest) -> Result<serde_json::Value, 
             affected += 1;
             o.signal_delay.insert(i, d);
         }
+        if let Some(mode) = req.signal_mode {
+            o.signal_mode = mode;
+        }
         for segs in &reopen {
             affected += segs.len();
             for s in segs {
@@ -439,7 +447,9 @@ pub fn apply(engine: &Engine, req: &UpdateRequest) -> Result<serde_json::Value, 
             "factor": o.factor.len(),
             "closed": o.closed.len(),
             "signals": o.signal_delay.len(),
+            "feed": o.feed_factor.len(),
         },
+        "signal_mode": o.signal_mode,
     }))
 }
 
@@ -520,6 +530,25 @@ async fn list_updates(State(st): State<Arc<AppState>>, headers: HeaderMap, Query
     .into_response()
 }
 
+async fn feed_status(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(r) = check_admin(&st, &headers) {
+        return r;
+    }
+    Json(st.feed_status.lock().clone()).into_response()
+}
+
+/// Triggers an immediate traffic-feed poll (returns at once; see GET for the result).
+async fn feed_poll_now(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(r) = check_admin(&st, &headers) {
+        return r;
+    }
+    if !st.feed_status.lock().enabled {
+        return osrm_error(StatusCode::BAD_REQUEST, "FeedDisabled", "no traffic feed configured (set HERE_API_KEY)");
+    }
+    st.feed_now.notify_one();
+    Json(json!({ "code": "Ok", "message": "poll started" })).into_response()
+}
+
 /// Loads the graph and builds an engine (customizing the free-flow metric).
 pub fn load_engine(path: &std::path::Path, areas: &[(String, crate::area::Area)]) -> anyhow::Result<Engine> {
     let t = Instant::now();
@@ -540,6 +569,7 @@ pub async fn serve(
     areas: Vec<(String, crate::area::Area)>,
     bind: String,
     max_concurrent: usize,
+    feed: Option<crate::traffic_feed::FeedConfig>,
 ) -> anyhow::Result<()> {
     let mut slots: Vec<Slot> = Vec::new();
     for path in graph_paths {
@@ -560,6 +590,11 @@ pub async fn serve(
     }
     let state = Arc::new(AppState {
         slots,
+        feed_status: parking_lot::Mutex::new(crate::traffic_feed::FeedStatus {
+            enabled: feed.is_some(),
+            ..Default::default()
+        }),
+        feed_now: tokio::sync::Notify::new(),
         areas,
         admin_token: std::env::var("SHEPHERD_ADMIN_TOKEN").ok().filter(|s| !s.is_empty()),
         limiter: Semaphore::new(max_concurrent.max(1)),
@@ -585,6 +620,39 @@ pub async fn serve(
                         Ok(Err(e)) => tracing::error!("reload of '{}' failed, keeping old graph: {e:#}", slot.profile),
                         Err(e) => tracing::error!("reload task failed: {e}"),
                     }
+                }
+            }
+        });
+    }
+
+    // Live traffic feed (driving profile only).
+    if let Some(cfg) = feed {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .expect("http client");
+            loop {
+                if let Some(slot) = st.slots.iter().find(|s| s.profile == "driving") {
+                    let mut status = crate::traffic_feed::poll_once(&client, &cfg, &slot.engine.load_full()).await;
+                    status.polls = st.feed_status.lock().polls + 1;
+                    match &status.error {
+                        None => tracing::info!(
+                            items = status.flow_items,
+                            slowed = status.slowed_segments,
+                            closed = status.closed_segments,
+                            "traffic feed applied in {} ms fetch + {:.0} ms customize",
+                            status.fetch_ms,
+                            status.customize_ms
+                        ),
+                        Some(e) => tracing::warn!("traffic feed poll failed: {e}"),
+                    }
+                    *st.feed_status.lock() = status;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(cfg.interval) => {}
+                    _ = st.feed_now.notified() => {}
                 }
             }
         });

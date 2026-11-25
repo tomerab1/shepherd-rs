@@ -290,8 +290,8 @@ impl Profile {
     /// For a fixed-time signal with cycle C and effective green g, the uniform delay is
     /// C·(1−g/C)²/2 (Webster); a typical urban cycle of 90 s with 45% green gives ~12 s.
     /// Mid-block lights are usually pedestrian crossings that cars rarely stop long at.
-    pub fn signal_delay_s(self, at_junction: bool) -> f64 {
-        match (self, at_junction) {
+    pub fn signal_delay_s(self, at_intersection: bool) -> f64 {
+        match (self, at_intersection) {
             (Profile::Car, true) => 12.0,
             (Profile::Car, false) => 5.0,
             (Profile::Foot, _) => 15.0,

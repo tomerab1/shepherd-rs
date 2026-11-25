@@ -53,8 +53,8 @@ pub struct OsmData {
     pub ways: Vec<OsmWay>,
     /// Coordinates of every node referenced by a routable way, sorted by OSM id.
     pub nodes: Vec<(i64, Coord)>,
-    /// OSM ids of nodes tagged `highway=traffic_signals`, sorted.
-    pub signals: Vec<i64>,
+    /// Traffic lights: (OSM node id, `SIG_*` flags), sorted by id.
+    pub signals: Vec<(i64, u8)>,
     pub restrictions: Vec<Restriction>,
     /// Restrictions we could not use (missing or malformed members); reported in stats.
     pub skipped_restrictions: usize,
@@ -67,8 +67,12 @@ impl OsmData {
             .ok()
             .map(|i| self.nodes[i].1)
     }
-    pub fn is_signal(&self, id: i64) -> bool {
-        self.signals.binary_search(&id).is_ok()
+    /// `SIG_*` flags of a node, 0 if it has no traffic light.
+    pub fn signal_flags(&self, id: i64) -> u8 {
+        self.signals
+            .binary_search_by_key(&id, |s| s.0)
+            .map(|i| self.signals[i].1)
+            .unwrap_or(0)
     }
 }
 
@@ -128,6 +132,32 @@ fn parse_restriction(rel: &osmpbf::Relation) -> Result<Option<Restriction>, ()> 
     }
 }
 
+/// Node is a vehicle traffic light (`highway=traffic_signals`).
+pub const SIG_VEHICLE: u8 = 1;
+/// Node is a pedestrian crossing with lights (`crossing=traffic_signals`).
+pub const SIG_CROSSING: u8 = 2;
+/// The light only applies in the way's forward / backward direction.
+pub const SIG_FORWARD: u8 = 4;
+pub const SIG_BACKWARD: u8 = 8;
+
+fn signal_flags<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> u8 {
+    let mut f = 0u8;
+    let mut dir = 0u8;
+    for (k, v) in tags {
+        match (k, v) {
+            ("highway", "traffic_signals") => f |= SIG_VEHICLE,
+            ("crossing", v) if v.split(';').any(|x| x == "traffic_signals") => f |= SIG_CROSSING,
+            ("traffic_signals:direction" | "direction", "forward") => dir = SIG_FORWARD,
+            ("traffic_signals:direction" | "direction", "backward") => dir = SIG_BACKWARD,
+            _ => {}
+        }
+    }
+    if f & SIG_VEHICLE != 0 {
+        f |= dir;
+    }
+    f
+}
+
 #[derive(Default)]
 struct Pass1 {
     ways: Vec<OsmWay>,
@@ -185,28 +215,18 @@ pub fn read_pbf(path: &str, profile: Profile) -> anyhow::Result<OsmData> {
     let needed_set: HashSet<i64> = needed.iter().copied().collect();
     drop(needed);
 
-    type NodeOut = (Vec<(i64, Coord)>, Vec<i64>);
+    type NodeOut = (Vec<(i64, Coord)>, Vec<(i64, u8)>);
     let (mut nodes, mut signals) = ElementReader::from_path(path)?.par_map_reduce(
         |el| -> NodeOut {
-            let (id, lat, lon, signal) = match el {
-                Element::DenseNode(n) => (
-                    n.id(),
-                    n.lat(),
-                    n.lon(),
-                    n.tags().any(|(k, v)| k == "highway" && v == "traffic_signals"),
-                ),
-                Element::Node(n) => (
-                    n.id(),
-                    n.lat(),
-                    n.lon(),
-                    n.tags().any(|(k, v)| k == "highway" && v == "traffic_signals"),
-                ),
+            let (id, lat, lon, flags) = match el {
+                Element::DenseNode(n) => (n.id(), n.lat(), n.lon(), signal_flags(n.tags())),
+                Element::Node(n) => (n.id(), n.lat(), n.lon(), signal_flags(n.tags())),
                 _ => return (Vec::new(), Vec::new()),
             };
             if !needed_set.contains(&id) {
                 return (Vec::new(), Vec::new());
             }
-            let sig = if signal { vec![id] } else { Vec::new() };
+            let sig = if flags != 0 { vec![(id, flags)] } else { Vec::new() };
             (vec![(id, Coord::from_deg(lat, lon))], sig)
         },
         || (Vec::new(), Vec::new()),
@@ -220,7 +240,7 @@ pub fn read_pbf(path: &str, profile: Profile) -> anyhow::Result<OsmData> {
         },
     )?;
     nodes.sort_unstable_by_key(|n| n.0);
-    signals.sort_unstable();
+    signals.sort_unstable_by_key(|s| s.0);
 
     Ok(OsmData {
         ways,

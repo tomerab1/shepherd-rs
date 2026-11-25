@@ -103,6 +103,8 @@ pub struct Snap {
     pub fraction: f64,
     pub point: Coord,
     pub distance_m: f64,
+    /// Forward bearing of the segment at the snapped point (degrees).
+    pub bearing: f64,
 }
 
 impl Graph {
@@ -167,6 +169,7 @@ impl Graph {
             fraction: if total > 0.0 { (along / total).clamp(0.0, 1.0) } else { 0.0 },
             point,
             distance_m: haversine(c, point),
+            bearing: crate::geo::bearing(geom[k], geom[k + 1]),
         })
     }
 

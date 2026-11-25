@@ -464,7 +464,7 @@ impl Engine {
         let (mut tot_dist, mut tot_weight, mut tot_duration) = (0.0, 0.0, 0.0);
         for lp in &legs_paths {
             let resolved: Vec<Resolved> = lp.pieces.iter().map(|p| resolve(self, &m, p)).collect();
-            for s in self.signals_on(&lp.pieces) {
+            for s in self.signals_on(&m, &lp.pieces) {
                 let c = self.graph.signals[s as usize].coord;
                 lights.push([c.lon(), c.lat()]);
             }

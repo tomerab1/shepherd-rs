@@ -46,10 +46,24 @@ node-based graph (6.6× fewer CCH edges than edge-based). Serving both profiles 
 `walking` (footpaths/steps/pedestrian streets, no one-way or turn rules, no motorways/trunks unless
 there is a sidewalk; node-based graph). Each profile is its own graph file.
 
-**Traffic lights:** OSM `highway=traffic_signals` nodes are kept with the graph. Their delay is
-applied by the metric, not baked in. The default is the expected wait for a typical signal (12 s at
-junctions for cars, from Webster's uniform delay `C·(1−g/C)²/2` with C = 90 s, g/C = 0.45). Real
-timing data overrides it per light at runtime. Routes list the lights they pass.
+**Traffic lights:** OSM maps a signalised intersection with several light nodes, one per approach
+or carriageway: 67% of Israel's 10.6k light nodes have another within 40 m. So lights are grouped
+into intersections and a route pays **one wait per intersection**. Stop-line lights near a junction
+apply only to traffic heading into it (explicit `traffic_signals:direction` tags win). Pedestrian
+`crossing=traffic_signals` lights count for walking. Waits are applied by the metric, not baked in.
+- `signal_mode=estimate` (default): lights without data get a typical wait (12 s per intersection
+  for cars, Webster's `C·(1−g/C)²/2` with C = 90 s and g/C = 0.45).
+- `signal_mode=timed-only`: only lights you uploaded timing for count; the rest are ignored.
+- `signal_mode=off`: lights are ignored entirely.
+
+Routes list the intersections with lights they pass.
+
+**Live traffic (HERE):** with `HERE_API_KEY` set, the server polls HERE Traffic v7 `/flow` for the
+graph's bounding box (1°×1° tiles; Israel is 8 requests per poll, every 15 min by default, which
+fits the free plan). Each flow item's shape is map-matched onto our segments, with direction
+checked against the segment bearing. HERE's free-flow/current speed ratio becomes a travel-time
+factor, and closed roads are closed. Each poll replaces the previous feed and re-customizes
+(~0.2 s). Status is at `GET /admin/traffic-feed`; `POST /admin/traffic-feed` polls now.
 
 **Avoid areas:** any polygon (GeoJSON) can be loaded as an avoidable area. A route with
 `exclude=<name>` uses a metric where travel inside the area weighs 40× more. Routes stay out
@@ -85,7 +99,8 @@ OSRM-compatible where it overlaps, so OSRM clients work.
 | `GET /nearest/v1/{profile}/{lon,lat}` | Snapped position, road name, OSM way id |
 | `GET /health` | Loaded profiles, graph stats, metric versions |
 | `GET /metrics` | Prometheus: request counts, latency histogram, metric versions |
-| `POST /admin/updates?profile=driving` | Live traffic, closures, signal timing (below) |
+| `POST /admin/updates?profile=driving` | Live traffic, closures, signal timing, `signal_mode` (below) |
+| `GET` / `POST /admin/traffic-feed` | HERE feed status / poll now |
 | `GET` / `DELETE /admin/updates?profile=...` | List / clear overrides |
 
 Admin endpoints require `x-admin-token` when `SHEPHERD_ADMIN_TOKEN` is set.
@@ -98,6 +113,7 @@ Admin endpoints require `x-admin-token` when `SHEPHERD_ADMIN_TOKEN` is set.
   "reopen":   [{ "way_id": 456 }],
   "signals":  [{ "osm_id": 1439390172, "cycle_s": 120, "green_s": 35 },
                { "near": [34.78, 32.08], "delay_s": 25 }],
+  "signal_mode": "timed-only",
   "reset": false
 }
 ```
@@ -112,7 +128,9 @@ apps/ShepherdMac/scripts/bundle.sh /Applications   # builds engine + app, instal
 
 The app starts the bundled engine on `127.0.0.1:5057` and stops it on quit. Features:
 - Drive / Walk modes, "Avoid Judea & Samaria"
-- Start and destination by typing `lat, lon` or clicking the map, or **Use my location**
+- Start and destination by **address or place name** (Apple MapKit autocomplete, Hebrew or
+  English), `lat, lon`, clicking the map, or **Use my location**
+- Traffic settings: traffic-light mode, and a HERE API key (kept in the Keychain) for live traffic
 - Turn-by-turn steps, traffic lights on the map
 - **Navigation**:
   - Next maneuver and distance to it
@@ -142,6 +160,5 @@ The app starts the bundled engine on `127.0.0.1:5057` and stops it on quit. Feat
 
 ## Possible next steps
 
-- **Traffic feed ingestion.** The admin API takes speeds by way or location. A poller for HERE
-  Traffic v7 flow (by bounding box) or TomTom would map their segments onto ours (needs an API key).
+- A TomTom provider for the traffic feed (HERE is implemented).
 - An iOS build of the app (the engine would run on a server or on the Mac over the LAN).

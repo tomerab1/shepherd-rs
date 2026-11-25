@@ -16,7 +16,7 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -35,11 +35,23 @@ pub struct Overrides {
     pub closed: BTreeSet<u32>,
     /// Traffic light index -> expected wait in seconds (from signal timing data).
     pub signal_delay: BTreeMap<u32, f32>,
+    /// How lights without timing data are treated.
+    #[serde(default)]
+    pub signal_mode: crate::signals::SignalMode,
+    /// Live traffic feed: segment -> travel-time factor [forward, backward]. Replaced on
+    /// every poll; combines with manual `factor`.
+    #[serde(default)]
+    pub feed_factor: BTreeMap<u32, [Option<f32>; 2]>,
 }
 
 impl Overrides {
     pub fn is_empty(&self) -> bool {
-        self.speed.is_empty() && self.factor.is_empty() && self.closed.is_empty() && self.signal_delay.is_empty()
+        self.speed.is_empty()
+            && self.factor.is_empty()
+            && self.closed.is_empty()
+            && self.signal_delay.is_empty()
+            && self.feed_factor.is_empty()
+            && self.signal_mode == crate::signals::SignalMode::Estimate
     }
 }
 
@@ -51,8 +63,14 @@ pub struct MetricState {
     pub elem_dur: Arc<Vec<u32>>,
     /// Routing weight of each EBG node: `elem_dur`, plus penalties such as avoided areas.
     pub elem_w: Arc<Vec<u32>>,
-    /// Expected traffic-light wait when entering each EBG node from its start junction.
+    /// Expected traffic-light wait when entering each EBG node from its start junction
+    /// (node-based graphs: when passing the arc's end junction).
     pub elem_entry: Arc<Vec<u32>>,
+    /// Edge-based graphs: arcs whose tail is already inside the next junction's intersection
+    /// (they skip its light wait).
+    pub arc_skip: Arc<Vec<u64>>,
+    /// Wait per traffic light in deciseconds under this metric (0 = ignored).
+    pub signal_waits: Arc<Vec<u32>>,
     pub version: u64,
     pub customize_ms: f64,
 }
@@ -76,9 +94,7 @@ pub struct AvoidArea {
 pub struct Engine {
     pub graph: Graph,
     pub areas: Vec<AvoidArea>,
-    /// Segment -> traffic lights inside it; junction -> traffic light at it.
-    pub seg_signals: HashMap<u32, Vec<u32>>,
-    pub junction_signal: HashMap<u32, u32>,
+    pub signal_index: crate::signals::SignalIndex,
     metric: ArcSwap<Metrics>,
     overrides: Mutex<Overrides>,
     /// Serializes metric rebuilds so updates apply in order.
@@ -135,20 +151,11 @@ impl Engine {
         let ov = Overrides::default();
         let metrics = build_metrics(&graph, &areas, &ov, 0);
         tracing::info!("customized free-flow metric in {:.0} ms", metrics.base.customize_ms);
-        let mut seg_signals: HashMap<u32, Vec<u32>> = HashMap::new();
-        let mut junction_signal: HashMap<u32, u32> = HashMap::new();
-        for (i, s) in graph.signals.iter().enumerate() {
-            if s.junction != crate::network::NONE_ID {
-                junction_signal.insert(s.junction, i as u32);
-            } else {
-                seg_signals.entry(s.segment).or_default().push(i as u32);
-            }
-        }
+        let signal_index = crate::signals::SignalIndex::new(&graph);
         Engine {
             graph,
             areas,
-            seg_signals,
-            junction_signal,
+            signal_index,
             metric: ArcSwap::from_pointee(metrics),
             overrides: Mutex::new(ov),
             rebuild: Mutex::new(()),
@@ -185,6 +192,7 @@ impl Engine {
             turn: &self.graph.turn,
             elem_w: &m.elem_w,
             elem_entry: &m.elem_entry,
+            arc_skip: &m.arc_skip,
             node_based: self.graph.meta.node_based,
         }
     }
@@ -214,30 +222,9 @@ impl Engine {
         (version, ms)
     }
 
-    /// Traffic lights passed by a leg, in driving order.
-    pub fn signals_on(&self, pieces: &[Piece]) -> Vec<u32> {
-        let mut out = Vec::new();
-        for (k, p) in pieces.iter().enumerate() {
-            if k > 0 {
-                let j = self.graph.elem_start_junction(p.elem);
-                if let Some(&s) = self.junction_signal.get(&j) {
-                    out.push(s);
-                }
-            }
-            if let Some(list) = self.seg_signals.get(&p.segment) {
-                let mut inside: Vec<(f64, u32)> = list
-                    .iter()
-                    .map(|&s| {
-                        let f = self.graph.signals[s as usize].fraction as f64;
-                        (if p.forward { f } else { 1.0 - f }, s)
-                    })
-                    .filter(|&(pos, _)| pos >= p.from && pos <= p.to)
-                    .collect();
-                inside.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                out.extend(inside.into_iter().map(|x| x.1));
-            }
-        }
-        out
+    /// Traffic lights a leg waits at (one per intersection), in travel order.
+    pub fn signals_on(&self, m: &MetricState, pieces: &[Piece]) -> Vec<u32> {
+        crate::signals::route_lights(&self.graph, &self.signal_index, &m.signal_waits, pieces)
     }
 
     pub fn snap(&self, c: Coord) -> Option<Snap> {
@@ -315,8 +302,11 @@ impl Engine {
             } else {
                 let prev = found.path[k - 1];
                 let r = g.first_out[prev as usize] as usize..g.first_out[prev as usize + 1] as usize;
-                let turn = r.filter(|&i| g.head[i] == node).map(|i| g.turn[i] as u32).min().unwrap_or(0);
-                turn + m.elem_entry[node as usize]
+                let arcs = self.input_arcs(m);
+                r.filter(|&i| g.head[i] == node)
+                    .map(|i| arcs.weight(i).saturating_sub(m.elem_w[node as usize]))
+                    .min()
+                    .unwrap_or(0)
             };
             pieces.push(Piece {
                 elem: node,
@@ -427,10 +417,6 @@ impl Engine {
     }
 }
 
-#[inline]
-fn add(a: u32, b: u32) -> u32 {
-    (a.min(INF) + b.min(INF)).min(INF)
-}
 
 /// Builds the base metric; area metrics start empty and are derived on demand.
 pub fn build_metrics(g: &Graph, areas: &[AvoidArea], ov: &Overrides, version: u64) -> Metrics {
@@ -441,36 +427,16 @@ pub fn build_metrics(g: &Graph, areas: &[AvoidArea], ov: &Overrides, version: u6
     }
 }
 
-/// Expected signal waits (deciseconds) per segment (mid-block lights) and per junction.
-fn signal_delays(g: &Graph, ov: &Overrides) -> (Vec<u32>, Vec<u32>) {
-    let profile = g.profile();
-    let mut seg = vec![0u32; g.segments.len()];
-    let mut junc = vec![0u32; g.junctions.len()];
-    for (i, s) in g.signals.iter().enumerate() {
-        let at_junction = s.junction != crate::network::NONE_ID;
-        let secs = ov
-            .signal_delay
-            .get(&(i as u32))
-            .map(|&d| d as f64)
-            .unwrap_or_else(|| profile.signal_delay_s(at_junction));
-        let ds = (secs.max(0.0) * 10.0).round() as u32;
-        if at_junction {
-            junc[s.junction as usize] += ds;
-        } else {
-            seg[s.segment as usize] += ds;
-        }
-    }
-    (seg, junc)
-}
-
-/// Computes node durations from the profile plus overrides, then customizes.
+/// Computes element durations from the profile plus overrides (traffic, closures, light
+/// waits), then customizes.
 pub fn build_metric(g: &Graph, ov: &Overrides, version: u64) -> MetricState {
     let t = Instant::now();
-    let (seg_delay, junc_delay) = signal_delays(g, ov);
-    let elem_dur: Vec<u32> = g
-        .elem_dseg
-        .par_iter()
-        .map(|&d| {
+    let idx = crate::signals::SignalIndex::new(g);
+    let waits = crate::signals::waits(g, ov);
+    let elem_dur: Vec<u32> = (0..g.elem_dseg.len() as u32)
+        .into_par_iter()
+        .map(|e| {
+            let d = g.elem_dseg[e as usize];
             let seg_id = d >> 1;
             let fwd = d & 1 == 0;
             let seg = &g.segments[seg_id as usize];
@@ -486,27 +452,62 @@ pub fn build_metric(g: &Graph, ov: &Overrides, version: u64) -> MetricState {
                     ((seg.length_m as f64 * 36.0 / kmh as f64).ceil() as u32).max(1)
                 };
             }
-            if let Some(Some(f)) = ov.factor.get(&seg_id).map(|s| s[k]) {
-                dur = if f <= 0.0 { INF } else { ((dur as f64 * f as f64).ceil() as u32).max(1) };
+            // Manual factor and live-feed factor combine (the feed is replaced each poll).
+            let factor = ov.factor.get(&seg_id).and_then(|s| s[k]).unwrap_or(1.0)
+                * ov.feed_factor.get(&seg_id).and_then(|s| s[k]).unwrap_or(1.0);
+            if factor != 1.0 {
+                dur = if factor <= 0.0 { INF } else { ((dur as f64 * factor as f64).ceil() as u32).max(1) };
             }
             if dur >= INF {
                 return INF;
             }
-            (dur + seg_delay[seg_id as usize]).min(INF)
+            (dur + crate::signals::interior_wait(g, &idx, &waits, e)).min(INF)
         })
         .collect();
-    // Signal wait at the junction an arc passes through: for edge-based graphs the junction a
-    // node starts at (paid on arcs into it); for node-based graphs the junction an arc ends at.
+
+    // Junction lights. Edge-based: the wait is put on the node entered (its start junction)
+    // and skipped on arcs whose tail is already inside that intersection. Node-based: the
+    // arc itself passes its end junction.
     let node_based = g.meta.node_based;
+    let junction_wait = |j: u32| idx.by_junction.get(&j).map_or(0, |&s| waits[s as usize]);
     let elem_entry: Vec<u32> = (0..g.elem_dseg.len() as u32)
         .into_par_iter()
-        .map(|n| {
-            let j = if node_based { g.elem_end_junction(n) } else { g.elem_start_junction(n) };
-            junc_delay[j as usize]
+        .map(|e| {
+            if node_based {
+                crate::signals::end_junction_signal(g, &idx, &waits, e).map_or(0, |s| waits[s as usize])
+            } else {
+                junction_wait(g.elem_start_junction(e))
+            }
         })
         .collect();
+    let arc_skip: Vec<u64> = if node_based {
+        Vec::new()
+    } else {
+        let tail_pays: Vec<bool> = (0..g.elem_dseg.len() as u32)
+            .into_par_iter()
+            .map(|e| crate::signals::end_junction_signal(g, &idx, &waits, e).is_some())
+            .collect();
+        let mut bits = vec![0u64; g.head.len().div_ceil(64)];
+        for (a, pays) in tail_pays.iter().enumerate() {
+            if !pays {
+                for i in g.first_out[a] as usize..g.first_out[a + 1] as usize {
+                    bits[i / 64] |= 1 << (i % 64);
+                }
+            }
+        }
+        bits
+    };
     let elem_dur = Arc::new(elem_dur);
-    customize_with(g, elem_dur.clone(), elem_dur, Arc::new(elem_entry), version, t)
+    customize_with(
+        g,
+        elem_dur.clone(),
+        elem_dur,
+        Arc::new(elem_entry),
+        Arc::new(arc_skip),
+        Arc::new(waits),
+        version,
+        t,
+    )
 }
 
 /// Derives the metric that avoids an area from a base metric: same real durations, but
@@ -526,31 +527,48 @@ pub fn derive_avoid_metric(g: &Graph, base: &MetricState, inside: &[u64]) -> Met
             }
         })
         .collect();
-    customize_with(g, base.elem_dur.clone(), Arc::new(elem_w), base.elem_entry.clone(), base.version, t)
+    customize_with(
+        g,
+        base.elem_dur.clone(),
+        Arc::new(elem_w),
+        base.elem_entry.clone(),
+        base.arc_skip.clone(),
+        base.signal_waits.clone(),
+        base.version,
+        t,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn customize_with(
     g: &Graph,
     elem_dur: Arc<Vec<u32>>,
     elem_w: Arc<Vec<u32>>,
     elem_entry: Arc<Vec<u32>>,
+    arc_skip: Arc<Vec<u64>>,
+    signal_waits: Arc<Vec<u32>>,
     version: u64,
     t: Instant,
 ) -> MetricState {
-    let node_based = g.meta.node_based;
-    let metric = customize(&g.topo, &g.arc_to_cch, |i| {
-        if node_based {
-            add(elem_w[i], elem_entry[i])
-        } else {
-            let h = g.head[i] as usize;
-            add(elem_w[h], elem_entry[h] + g.turn[i] as u32)
-        }
-    });
+    let metric = {
+        let arcs = InputArcs {
+            first_out: &g.first_out,
+            head: &g.head,
+            turn: &g.turn,
+            elem_w: &elem_w,
+            elem_entry: &elem_entry,
+            arc_skip: &arc_skip,
+            node_based: g.meta.node_based,
+        };
+        customize(&g.topo, &g.arc_to_cch, |i| arcs.weight(i))
+    };
     MetricState {
         metric,
         elem_dur,
         elem_w,
         elem_entry,
+        arc_skip,
+        signal_waits,
         version,
         customize_ms: t.elapsed().as_secs_f64() * 1e3,
     }

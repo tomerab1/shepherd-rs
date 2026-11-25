@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const MAGIC: &[u8; 8] = b"SHEPHRD\x01";
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 const ALIGN: u64 = 64;
 const NAME_LEN: usize = 24;
 

@@ -45,10 +45,21 @@ enum EngineStatus {
 @Observable
 final class AppModel {
     var status: EngineStatus = .starting
-    var start: CLLocationCoordinate2D? { didSet { startText = Self.format(start) } }
-    var end: CLLocationCoordinate2D? { didSet { endText = Self.format(end) } }
+    var start: CLLocationCoordinate2D?
+    var end: CLLocationCoordinate2D?
+    /// What the fields show: an address/place name or "lat, lon".
     var startText = ""
     var endText = ""
+    /// The text that produced the current start/end, to tell edits apart from labels.
+    private var startResolvedText = ""
+    private var endResolvedText = ""
+    let startSearch = PlaceSearch()
+    let endSearch = PlaceSearch()
+
+    // Traffic lights & live traffic
+    var signalMode = "estimate"
+    var feed: FeedStatus?
+    var hereKey = Keychain.get("here-api-key") ?? ""
     var clickMode: ClickMode = .start
     var mode: TravelMode = .drive
     var avoidJudeaSamaria = false
@@ -94,10 +105,11 @@ final class AppModel {
             try await EngineProcess.shared.startIfNeeded()
             let h = try await client.health()
             status = .ready(h)
+            await refreshFeed()
             if start == nil && end == nil {
                 // A useful first route: Tel Aviv (Azrieli) to Jerusalem (Jaffa Gate).
-                start = CLLocationCoordinate2D(latitude: 32.0744, longitude: 34.7918)
-                end = CLLocationCoordinate2D(latitude: 31.7767, longitude: 35.2276)
+                setStart(CLLocationCoordinate2D(latitude: 32.0744, longitude: 34.7918), label: "Azrieli Center, Tel Aviv")
+                setEnd(CLLocationCoordinate2D(latitude: 31.7767, longitude: 35.2276), label: "Jaffa Gate, Jerusalem")
                 await computeRoute()
             }
         } catch {
@@ -110,11 +122,11 @@ final class AppModel {
     func mapClicked(_ c: CLLocationCoordinate2D) async {
         switch clickMode {
         case .start:
-            start = c
+            setStart(c, label: nil)
             clickMode = .end
             if end != nil { await computeRoute() }
         case .end:
-            end = c
+            setEnd(c, label: nil)
             await computeRoute()
         case .close:
             await addIncident(at: c, closed: true)
@@ -123,29 +135,99 @@ final class AppModel {
         }
     }
 
+    func setStart(_ c: CLLocationCoordinate2D?, label: String?) {
+        start = c
+        startText = label ?? Self.format(c)
+        startResolvedText = startText
+        startSearch.clear()
+    }
+
+    func setEnd(_ c: CLLocationCoordinate2D?, label: String?) {
+        end = c
+        endText = label ?? Self.format(c)
+        endResolvedText = endText
+        endSearch.clear()
+    }
+
+    /// Picks an autocomplete suggestion for the start or destination field.
+    func pick(_ s: MKLocalSearchCompletion, forStart: Bool) async {
+        do {
+            let (c, name) = try await PlaceSearch.resolve(s)
+            if forStart { setStart(c, label: name) } else { setEnd(c, label: name) }
+            if start != nil && end != nil { await computeRoute() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Resolves whatever is typed in a field: "lat, lon" or an address/place.
+    private func resolveField(_ text: String, current: CLLocationCoordinate2D?, resolved: String) async throws -> (CLLocationCoordinate2D, String)? {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return nil }
+        if let c = Self.parse(t) { return (c, Self.format(c)) }
+        if t == resolved, let current { return (current, t) }
+        return try await PlaceSearch.search(t)
+    }
+
     func commitText() async {
-        if !startText.isEmpty && Self.parse(startText) == nil {
-            errorMessage = "Start must be \"lat, lon\" (e.g. 32.0744, 34.7918)"
-            return
+        do {
+            if let (c, name) = try await resolveField(startText, current: start, resolved: startResolvedText) {
+                setStart(c, label: name)
+            }
+            if let (c, name) = try await resolveField(endText, current: end, resolved: endResolvedText) {
+                setEnd(c, label: name)
+            }
+            await computeRoute()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        if !endText.isEmpty && Self.parse(endText) == nil {
-            errorMessage = "Destination must be \"lat, lon\" (e.g. 31.7767, 35.2276)"
-            return
-        }
-        if let s = Self.parse(startText) { start = s }
-        if let e = Self.parse(endText) { end = e }
-        await computeRoute()
     }
 
     func swap() async {
-        (start, end) = (end, start)
+        let (s, st, e, et) = (start, startText, end, endText)
+        setStart(e, label: et)
+        setEnd(s, label: st)
         await computeRoute()
+    }
+
+    // MARK: Traffic lights & live traffic
+
+    func applySignalMode() async {
+        do {
+            for p in ["driving", "foot"] {
+                _ = try await client.setSignalMode(signalMode, profile: p)
+            }
+            await computeRoute(fit: false)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func refreshFeed() async {
+        feed = try? await client.feedStatus()
+    }
+
+    /// Stores the HERE key in the Keychain and restarts the engine with it.
+    func saveHereKey() async {
+        Keychain.set("here-api-key", hereKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        status = .starting
+        do {
+            try await EngineProcess.shared.restart()
+            status = .ready(try await client.health())
+            if signalMode != "estimate" { await applySignalMode() }
+            // Give the first poll a moment, then show its result.
+            try? await Task.sleep(for: .seconds(4))
+            await refreshFeed()
+            await computeRoute(fit: false)
+        } catch {
+            status = .failed(error.localizedDescription)
+        }
     }
 
     func clear() {
         stopNavigation()
-        start = nil
-        end = nil
+        setStart(nil, label: "")
+        setEnd(nil, label: "")
         route = nil
         routeCoords = []
         track = nil
@@ -236,7 +318,7 @@ final class AppModel {
 
     private func setStartFromLocation(_ c: CLLocationCoordinate2D) {
         waitingForLocation = false
-        start = c
+        setStart(c, label: "My location")
         fix = c
         clickMode = .end
         if end != nil { Task { await computeRoute() } } else {
@@ -333,7 +415,7 @@ final class AppModel {
         if nav.offRouteFixes >= 3 && !rerouting && !nav.arrived {
             rerouting = true
             nav.offRouteFixes = 0
-            start = loc.coordinate
+            setStart(loc.coordinate, label: "My location")
             Task {
                 await computeRoute(fit: false)
                 rerouting = false

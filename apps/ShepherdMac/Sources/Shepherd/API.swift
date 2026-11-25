@@ -77,6 +77,16 @@ struct Health: Decodable {
     let customize_ms: Double
 }
 
+struct FeedStatus: Decodable {
+    let enabled: Bool
+    let polls: Int
+    let last_poll_unix: Double
+    let ok: Bool
+    let error: String?
+    let slowed_segments: Int
+    let closed_segments: Int
+}
+
 struct UpdateResult: Decodable {
     struct Active: Decodable {
         let closed: Int
@@ -144,6 +154,12 @@ struct RoutingClient {
             "traffic": [["near": [c.longitude, c.latitude], "radius_m": radius, "factor": factor]]
         ])
     }
+
+    func setSignalMode(_ mode: String, profile: String) async throws -> UpdateResult {
+        try await send("POST", "admin/updates?profile=\(profile)", body: ["signal_mode": mode])
+    }
+
+    func feedStatus() async throws -> FeedStatus { try await get("admin/traffic-feed") }
 
     func clearUpdates(profile: String) async throws -> UpdateResult {
         try await send("DELETE", "admin/updates?profile=\(profile)")

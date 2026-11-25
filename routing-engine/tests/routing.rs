@@ -304,7 +304,7 @@ fn cch_matches_dijkstra_with_random_restrictions() {
 #[test]
 fn traffic_lights_counted_and_timing_updates_apply() {
     let mut g = Grid::new(5, 5);
-    g.osm.signals = vec![node(2, 2)];
+    g.osm.signals = vec![(node(2, 2), routing_engine::osm::SIG_VEHICLE)];
     let e = g.engine();
     assert_eq!(e.graph.meta.num_signals, 1);
     let (a, b) = (mid((0, 2), (1, 2)), mid((3, 2), (4, 2)));
@@ -357,7 +357,7 @@ fn via_way_restriction_blocks_only_the_full_sequence() {
 #[test]
 fn walking_graph_is_node_based_and_exact() {
     let mut g = Grid::new(12, 12);
-    g.osm.signals = vec![node(3, 3), node(6, 6)];
+    g.osm.signals = vec![(node(3, 3), routing_engine::osm::SIG_VEHICLE), (node(6, 6), routing_engine::osm::SIG_VEHICLE)];
     for x in 0..6 {
         g.set_oneway(node(x, 4), node(x + 1, 4));
     }
@@ -381,4 +381,46 @@ fn walking_graph_is_node_based_and_exact() {
     let r = e.route(&[mid((0, 0), (1, 0)), mid((10, 11), (11, 11))], &RouteOptions::default()).unwrap();
     assert_eq!(r.routes[0].legs[0].steps.last().unwrap().maneuver.kind, "arrive");
     assert_eq!(r.routes[0].legs[0].steps[0].mode, "walking");
+}
+
+#[test]
+fn one_wait_per_intersection_and_signal_modes() {
+    // A dual-carriageway-style intersection: lights on two neighbouring junction nodes 40 m
+    // apart (both mapped as traffic_signals). Passing both must cost one wait, not two.
+    let mut g = Grid::new(6, 3);
+    // Squeeze column 3 next to column 2 so (2,1) and (3,1) are one intersection (~20 m).
+    for n in g.osm.nodes.iter_mut() {
+        let (x, y) = ((n.0 - 1000) % 100, (n.0 - 1000) / 100);
+        if x >= 3 {
+            n.1 = Coord::from_deg(32.0 + y as f64 * SPACING, 34.8 + (x as f64 - 0.9) * SPACING);
+        }
+    }
+    g.osm.signals = vec![
+        (node(2, 1), routing_engine::osm::SIG_VEHICLE),
+        (node(3, 1), routing_engine::osm::SIG_VEHICLE),
+    ];
+    let e = g.engine();
+    let route = |e: &Engine| e.route(&[mid((0, 1), (1, 1)), mid((4, 1), (5, 1))], &RouteOptions::default()).unwrap();
+    let r = route(&e);
+    assert_eq!(r.routes[0].traffic_lights.len(), 1, "two lights of one intersection count once");
+    let with_lights = r.routes[0].duration;
+
+    let set = |mode: &str| {
+        let req: UpdateRequest = serde_json::from_value(serde_json::json!({ "signal_mode": mode })).unwrap();
+        apply(&e, &req).unwrap();
+    };
+    set("off");
+    let off = route(&e);
+    assert!(off.routes[0].traffic_lights.is_empty());
+    // One intersection wait (12 s), not two.
+    assert!((with_lights - off.routes[0].duration - 12.0).abs() < 1.0, "{with_lights} vs {}", off.routes[0].duration);
+
+    set("timed-only");
+    assert!(route(&e).routes[0].traffic_lights.is_empty(), "untimed lights are ignored");
+    let req: UpdateRequest =
+        serde_json::from_value(serde_json::json!({ "signals": [{ "osm_id": node(2, 1), "delay_s": 30 }] })).unwrap();
+    apply(&e, &req).unwrap();
+    let timed = route(&e);
+    assert_eq!(timed.routes[0].traffic_lights.len(), 1);
+    assert!((timed.routes[0].duration - off.routes[0].duration - 30.0).abs() < 1.0);
 }

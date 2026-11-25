@@ -53,6 +53,9 @@ struct Sidebar: View {
 
     var body: some View {
         @Bindable var model = model
+        // One scroll view for controls and steps, so expanding sections never pushes
+        // content out of the window.
+        ScrollView {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 StatusRow()
@@ -73,7 +76,8 @@ struct Sidebar: View {
                         .onChange(of: model.avoidJudeaSamaria) { Task { await model.computeRoute() } }
                 }
                 HStack {
-                    CoordField(label: "Start", symbol: "circle.circle.fill", tint: .green, text: $model.startText)
+                    PlaceField(label: "Start", symbol: "circle.circle.fill", tint: .green,
+                               text: $model.startText, search: model.startSearch, isStart: true)
                     Button {
                         model.useMyLocation()
                     } label: {
@@ -85,7 +89,8 @@ struct Sidebar: View {
                     }
                     .help("Start from my current location")
                 }
-                CoordField(label: "Destination", symbol: "mappin.circle.fill", tint: .red, text: $model.endText)
+                PlaceField(label: "Destination", symbol: "mappin.circle.fill", tint: .red,
+                           text: $model.endText, search: model.endSearch, isStart: false)
                 if let err = model.location.error {
                     Label(err, systemImage: "location.slash").font(.caption).foregroundStyle(.orange)
                 }
@@ -114,6 +119,7 @@ struct Sidebar: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                 }
+                TrafficSettings()
                 if !model.incidents.isEmpty {
                     HStack {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -153,6 +159,7 @@ struct Sidebar: View {
             Divider()
             StepList()
         }
+        }
     }
 }
 
@@ -180,20 +187,115 @@ struct StatusRow: View {
     }
 }
 
-struct CoordField: View {
+/// A start/destination field: type an address or place (with suggestions), or "lat, lon".
+struct PlaceField: View {
     let label: String
     let symbol: String
     let tint: Color
     @Binding var text: String
+    let search: PlaceSearch
+    let isStart: Bool
     @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack {
-            Image(systemName: symbol).foregroundStyle(tint).frame(width: 18)
-            TextField("\(label): lat, lon", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.body, design: .monospaced))
-                .onSubmit { Task { await model.commitText() } }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: symbol).foregroundStyle(tint).frame(width: 18)
+                TextField("\(label): address, place or lat, lon", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focused)
+                    .onChange(of: text) { if focused { search.update(text) } }
+                    .onSubmit {
+                        search.clear()
+                        Task { await model.commitText() }
+                    }
+            }
+            if focused && !search.suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(search.suggestions, id: \.self) { s in
+                        Button {
+                            focused = false
+                            search.clear()
+                            Task { await model.pick(s, forStart: isStart) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(s.title).lineLimit(1)
+                                if !s.subtitle.isEmpty {
+                                    Text(s.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+                .background(.background, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+                .padding(.leading, 26)
+            }
+        }
+    }
+}
+
+/// Traffic lights and live traffic settings.
+struct TrafficSettings: View {
+    @Environment(AppModel.self) private var model
+    @State private var expanded = false
+
+    var body: some View {
+        @Bindable var model = model
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Traffic lights", selection: $model.signalMode) {
+                    Text("Estimated").tag("estimate")
+                    Text("Only with timing data").tag("timed-only")
+                    Text("Off").tag("off")
+                }
+                .onChange(of: model.signalMode) { Task { await model.applySignalMode() } }
+                Text("“Only with timing data” ignores lights that have no real timing (uploaded via the admin API).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
+                HStack {
+                    SecureField("HERE API key", text: $model.hereKey)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save") { Task { await model.saveHereKey() } }
+                }
+                feedLine.font(.caption)
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack {
+                Label("Traffic", systemImage: "car.rear.road.lane")
+                Spacer()
+                if let f = model.feed, f.enabled {
+                    Circle().fill(f.ok ? .green : .orange).frame(width: 7, height: 7)
+                    Text("live").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task { await model.refreshFeed() }
+    }
+
+    @ViewBuilder private var feedLine: some View {
+        if let f = model.feed, f.enabled {
+            if let e = f.error {
+                Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).lineLimit(3)
+            } else if f.polls > 0 {
+                let when = Date(timeIntervalSince1970: f.last_poll_unix)
+                Text("Live traffic on · \(f.slowed_segments) slowed, \(f.closed_segments) closed · updated \(when.formatted(date: .omitted, time: .shortened)) · every 15 min")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Live traffic starting…").foregroundStyle(.secondary)
+            }
+        } else {
+            Text("Live traffic off. Get a free key at developer.here.com (Traffic API v7), paste it here and Save.")
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -293,7 +395,15 @@ struct StepList: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        List(model.steps, selection: Binding(get: { model.selectedStep }, set: { model.selectedStep = $0 })) { step in
+        if model.steps.isEmpty {
+            ContentUnavailableView(
+                "No route yet",
+                systemImage: "map",
+                description: Text("Type an address, a place or coordinates, or click the map, to set a start and a destination."))
+                .padding(.top, 30)
+        }
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(model.steps) { step in
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: Self.icon(for: step.maneuver))
                     .font(.title3)
@@ -308,18 +418,14 @@ struct StepList: View {
                     }
                 }
             }
-            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 14)
+            .background(model.selectedStep == step.id ? Color.accentColor.opacity(0.18) : .clear)
             .contentShape(Rectangle())
             .onTapGesture { model.focus(step) }
-        }
-        .listStyle(.inset)
-        .overlay {
-            if model.steps.isEmpty {
-                ContentUnavailableView(
-                    "No route yet",
-                    systemImage: "map",
-                    description: Text("Type coordinates or click the map to set a start and a destination."))
-            }
+            Divider().padding(.leading, 50)
+          }
         }
     }
 

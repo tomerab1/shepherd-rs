@@ -107,6 +107,8 @@ pub struct InputArcs<'a> {
     pub elem_w: &'a [u32],
     /// Extra weight when entering a node from its start junction (traffic light there).
     pub elem_entry: &'a [u32],
+    /// Edge-based graphs: arcs that skip the light wait of the node they enter.
+    pub arc_skip: &'a [u64],
     /// Node-based graph: elements are the arcs themselves (`elem_w[i] + elem_entry[i]`).
     pub node_based: bool,
 }
@@ -119,7 +121,9 @@ impl InputArcs<'_> {
             return (self.elem_w[i].min(INF) + self.elem_entry[i]).min(INF);
         }
         let h = self.head[i] as usize;
-        (self.elem_w[h].min(INF) + self.elem_entry[h] + self.turn[i] as u32).min(INF)
+        let skip = self.arc_skip.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0);
+        let entry = if skip { 0 } else { self.elem_entry[h] };
+        (self.elem_w[h].min(INF) + entry + self.turn[i] as u32).min(INF)
     }
 }
 
