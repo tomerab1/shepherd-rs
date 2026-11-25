@@ -8,3 +8,6 @@ routing-engine/data/*.graph
 routing-engine/data/*.tmp
 routing-engine/data/israel-and-palestine-latest.osm.pbf
 routing-engine/tests/data/*.graph
+routing-engine/ffi/target/
+apps/ShepherdPhone/build/
+apps/ShepherdPhone/ShepherdPhone.xcodeproj/

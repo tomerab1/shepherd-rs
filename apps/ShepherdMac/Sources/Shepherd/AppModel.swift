@@ -466,11 +466,7 @@ final class AppModel {
         return String(format: "%.5f, %.5f", c.latitude, c.longitude)
     }
 
-    static func parse(_ s: String) -> CLLocationCoordinate2D? {
-        let parts = s.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }
-        guard parts.count == 2, (-90...90).contains(parts[0]), (-180...180).contains(parts[1]) else { return nil }
-        return CLLocationCoordinate2D(latitude: parts[0], longitude: parts[1])
-    }
+    static func parse(_ s: String) -> CLLocationCoordinate2D? { Coordinates.parse(s) }
 
     static func distance(_ m: Double) -> String {
         m < 1000 ? "\(Int((m / 10).rounded() * 10)) m" : String(format: "%.1f km", m / 1000)

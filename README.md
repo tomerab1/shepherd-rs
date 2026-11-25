@@ -1,11 +1,13 @@
 # Shepherd
 
 A road routing engine in Rust (driving and walking) with live traffic, road closures,
-traffic-light timing and avoidable areas, plus a native macOS app with turn-by-turn navigation.
+traffic-light timing and avoidable areas, plus native macOS and iPhone apps with turn-by-turn navigation.
 
 ```
-routing-engine/     Rust engine + axum HTTP server (`shepherd` binary)
-apps/ShepherdMac/   SwiftUI + MapKit app that bundles and runs the engine
+routing-engine/       Rust engine + axum HTTP server (`shepherd` binary)
+routing-engine/ffi/   C interface to the engine (static library for the iPhone app)
+apps/ShepherdMac/     SwiftUI + MapKit app that bundles and runs the engine
+apps/ShepherdPhone/   iPhone app with the engine and maps built in (works offline)
 ```
 
 ## How it works
@@ -148,6 +150,26 @@ The app starts the bundled engine on `127.0.0.1:5057` and stops it on quit. Feat
   - Re-routes automatically when you leave the route
   - **Simulate** plays the route at 1×, 5× or 20× (switchable during navigation)
 - Live incidents: click a road to close it or add a jam, and see the route change
+
+## iPhone app
+
+The engine is compiled into the app (`routing-engine/ffi`, a static library with a C
+interface) and both graphs ship inside it, so routing runs on the phone with no server and
+no connection (~100 ms for a cross-country route). Building needs Xcode and XcodeGen.
+
+```bash
+apps/ShepherdPhone/scripts/build.sh sim                              # build for the iOS simulator
+SHEPHERD_TEAM=<team id> apps/ShepherdPhone/scripts/build.sh device   # build, sign, install on a USB-connected iPhone
+```
+
+The iPhone needs Developer Mode on, and Xcode must be signed in to the Apple ID of the team.
+With a free Personal Team the app has to be reinstalled every 7 days.
+
+Features: address search, Drive / Walk, Avoid Judea & Samaria, traffic-light modes, long-press
+the map to go somewhere, and navigation with **spoken directions** (a heads-up before each
+maneuver and a prompt at it, "then …" for maneuvers close together), guidance with the screen
+locked, auto re-routing, arrival time from your walking pace, and Simulate.
+Live traffic and road incidents are in the Mac app only for now.
 
 ## Operations
 

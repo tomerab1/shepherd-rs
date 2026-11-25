@@ -23,7 +23,7 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
 
     func update(_ text: String) {
         let q = text.trimmingCharacters(in: .whitespaces)
-        if q.count < 2 || AppModel.parse(q) != nil {
+        if q.count < 2 || Coordinates.parse(q) != nil {
             completer.cancel()
             suggestions = []
         } else {
@@ -68,6 +68,15 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
 
     static func display(_ title: String, _ subtitle: String) -> String {
         subtitle.isEmpty ? title : "\(title), \(subtitle)"
+    }
+}
+
+/// "lat, lon" text.
+enum Coordinates {
+    static func parse(_ s: String) -> CLLocationCoordinate2D? {
+        let parts = s.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }
+        guard parts.count == 2, (-90...90).contains(parts[0]), (-180...180).contains(parts[1]) else { return nil }
+        return CLLocationCoordinate2D(latitude: parts[0], longitude: parts[1])
     }
 }
 

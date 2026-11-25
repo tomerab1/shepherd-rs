@@ -14,6 +14,7 @@ pub mod store;
 pub mod traffic_feed;
 pub mod engine;
 pub mod route;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod signals;
 pub mod verify;

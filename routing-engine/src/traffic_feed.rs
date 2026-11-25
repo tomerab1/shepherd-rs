@@ -7,12 +7,15 @@
 //! speeds compare to our profile speeds. Closed roads (`traversability: closed`, or a jam
 //! factor of 10) are closed. The result replaces the previous feed and re-customizes.
 
-use crate::engine::Engine;
 use crate::geo::{bearing, haversine, turn_angle, Coord};
 use crate::graph::Graph;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "server")]
+use std::time::Instant;
+#[cfg(feature = "server")]
+use crate::engine::Engine;
 
 #[derive(Clone, Debug)]
 pub struct FeedConfig {
@@ -194,6 +197,7 @@ pub fn match_flow(g: &Graph, items: &[FlowItem]) -> Matched {
 }
 
 /// Fetches one tile.
+#[cfg(feature = "server")]
 pub async fn fetch_tile(client: &reqwest::Client, cfg: &FeedConfig, t: [f64; 4]) -> anyhow::Result<FlowResponse> {
     let url = format!("{}/v7/flow", cfg.base_url.trim_end_matches('/'));
     let bbox = format!("bbox:{:.5},{:.5},{:.5},{:.5}", t[0], t[1], t[2], t[3]);
@@ -211,6 +215,7 @@ pub async fn fetch_tile(client: &reqwest::Client, cfg: &FeedConfig, t: [f64; 4])
 }
 
 /// One poll: fetch every tile, match, publish. Returns the new status.
+#[cfg(feature = "server")]
 pub async fn poll_once(client: &reqwest::Client, cfg: &FeedConfig, engine: &std::sync::Arc<Engine>) -> FeedStatus {
     let mut st = FeedStatus {
         enabled: true,

@@ -20,7 +20,13 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         status = manager.authorizationStatus
     }
 
-    var authorized: Bool { status == .authorizedAlways || status == .authorized }
+    var authorized: Bool {
+        #if os(macOS)
+        status == .authorizedAlways || status == .authorized
+        #else
+        status == .authorizedAlways || status == .authorizedWhenInUse
+        #endif
+    }
 
     func start() {
         error = nil
@@ -35,6 +41,17 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         manager.stopUpdatingLocation()
         running = false
     }
+
+    #if os(iOS)
+    /// Keeps updates flowing with the screen locked (navigation), tuned for walking or driving.
+    func setNavigating(_ on: Bool, walking: Bool) {
+        manager.activityType = walking ? .fitness : .automotiveNavigation
+        manager.distanceFilter = on ? (walking ? 2 : 5) : kCLDistanceFilterNone
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.allowsBackgroundLocationUpdates = on
+        manager.showsBackgroundLocationIndicator = on
+    }
+    #endif
 
     nonisolated func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
         let s = m.authorizationStatus
