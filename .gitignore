@@ -1,0 +1,10 @@
+# Build output
+routing-engine/target/
+apps/ShepherdMac/.build/
+apps/ShepherdMac/build/
+
+# Generated routing data (rebuild with `shepherd preprocess`; see README)
+routing-engine/data/*.graph
+routing-engine/data/*.tmp
+routing-engine/data/israel-and-palestine-latest.osm.pbf
+routing-engine/tests/data/*.graph
